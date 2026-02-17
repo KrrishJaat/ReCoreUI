@@ -59,31 +59,24 @@ jobs:
           sudo bash build.sh --build ${{ inputs.device }}
 
 
-      - name: Upload ROM to GoFile
-        if: ${{ inputs.upload_cloud }}
-        run: |
-          cd out
+      - name: Upload ROM to Gofile
+  run: |
+    ROM_FILE=$(find out -type f -name "*.zip" | head -n 1)
 
-          ROM_FILE=$(ls *.zip | head -n 1)
+    if [ -z "$ROM_FILE" ]; then
+      echo "No ROM zip found!"
+      exit 1
+    fi
 
-          if [ -z "$ROM_FILE" ]; then
-            echo "No ROM zip found!"
-            exit 1
-          fi
+    SERVER=$(curl -s https://api.gofile.io/servers | jq -r '.data.servers[0].name')
 
-          echo "ROM Found: $ROM_FILE"
+    RESPONSE=$(curl -s \
+      -H "Authorization: Bearer ${{ secrets.GOFILE_TOKEN }}" \
+      -F "file=@$ROM_FILE" \
+      https://$SERVER.gofile.io/uploadFile)
 
-          echo "Getting GoFile server..."
-          SERVER=$(curl -s https://api.gofile.io/servers | jq -r '.data.servers[0].name')
+    echo "$RESPONSE"
 
-          echo "Uploading to GoFile server: $SERVER"
-          LINK=$(curl -s -F "file=@${ROM_FILE}" "https://${SERVER}.gofile.io/uploadFile" | jq -r '.data.downloadPage')
+    DOWNLOAD_LINK=$(echo $RESPONSE | jq -r '.data.downloadPage')
 
-          if [ "$LINK" = "null" ] || [ -z "$LINK" ]; then
-            echo "Upload failed!"
-            exit 1
-          fi
-
-          echo "Download Link: $LINK"
-
-          echo "GOFILE_LINK=$LINK" >> $GITHUB_ENV
+    echo "Download Link: $DOWNLOAD_LINK"
