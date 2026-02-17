@@ -1,4 +1,4 @@
-name: Build AstroROM
+name: Build ReCoreUI
 run-name: Building ROM > ${{ inputs.device }}
 on:
   workflow_dispatch:
@@ -54,7 +54,7 @@ jobs:
       - name: Disk Space Check
         run: df -h /
 
-      - name: Run AstroROM Build
+      - name: Run ReCoreUI Build
         run: |
           sudo bash build.sh --build ${{ inputs.device }}
 
