@@ -60,6 +60,7 @@ jobs:
 
 
       - name: Upload ROM to Gofile
+        if: inputs.upload_cloud == true
         run: |
           echo "Searching for ROM zip..."
           ROM_FILE=$(find out -type f -name "*.zip" | head -n 1)
@@ -76,6 +77,7 @@ jobs:
           RESPONSE=$(curl -s \
             -H "Authorization: Bearer ${{ secrets.GOFILE_TOKEN }}" \
             -F "file=@$ROM_FILE" \
+            -F "folderId=${{ secrets.GOFILE_FOLDER_ID }}" \
             https://$SERVER.gofile.io/uploadFile)
 
           echo "$RESPONSE"
