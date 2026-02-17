@@ -40,7 +40,6 @@ To provide a modular, device-adaptive OneUI port framework that can patch suppor
 - Samsung encryption removed
 - Fixed Knox apps (Secure Folder,Secure WiFi,Private Share,Health etc)
 - Fixed samsung wearables 
-- Inbuilt PUI theme 
 - Disabled secure screenshot detection
 - Fixed SmartView
 - Unlimited google photos storage with original quality 
@@ -57,14 +56,6 @@ To provide a modular, device-adaptive OneUI port framework that can patch suppor
 - Native call recording
 - And many more 
 
-
-### Extras*
-- 4K/120FPS & log video
-- Zoom slider and flagship camera features 
-- Adaptive refresh rate etc.
-  
-* These features vary upon devices and platform.
-  
 ---
 
 ## Special Thanks
