@@ -60,23 +60,29 @@ jobs:
 
 
       - name: Upload ROM to Gofile
-  run: |
-    ROM_FILE=$(find out -type f -name "*.zip" | head -n 1)
+        run: |
+          echo "Searching for ROM zip..."
+          ROM_FILE=$(find out -type f -name "*.zip" | head -n 1)
 
-    if [ -z "$ROM_FILE" ]; then
-      echo "No ROM zip found!"
-      exit 1
-    fi
+          if [ -z "$ROM_FILE" ]; then
+            echo "No ROM zip found!"
+            exit 1
+          fi
 
-    SERVER=$(curl -s https://api.gofile.io/servers | jq -r '.data.servers[0].name')
+          echo "Found ROM: $ROM_FILE"
 
-    RESPONSE=$(curl -s \
-      -H "Authorization: Bearer ${{ secrets.GOFILE_TOKEN }}" \
-      -F "file=@$ROM_FILE" \
-      https://$SERVER.gofile.io/uploadFile)
+          SERVER=$(curl -s https://api.gofile.io/servers | jq -r '.data.servers[0].name')
 
-    echo "$RESPONSE"
+          RESPONSE=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.GOFILE_TOKEN }}" \
+            -F "file=@$ROM_FILE" \
+            https://$SERVER.gofile.io/uploadFile)
 
-    DOWNLOAD_LINK=$(echo $RESPONSE | jq -r '.data.downloadPage')
+          echo "$RESPONSE"
 
-    echo "Download Link: $DOWNLOAD_LINK"
+          DOWNLOAD_LINK=$(echo $RESPONSE | jq -r '.data.downloadPage')
+
+          echo "=============================="
+          echo "Upload Successful!"
+          echo "Download Link: $DOWNLOAD_LINK"
+          echo "=============================="
