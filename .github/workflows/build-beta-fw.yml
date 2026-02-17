@@ -1,4 +1,4 @@
-name: Build AstroROM from beta firmware
+name: Build ReCoreUI from beta firmware
 
 on:
   workflow_dispatch:
@@ -65,7 +65,7 @@ jobs:
         run: df -h /
 
 
-      - name: Run AstroROM build
+      - name: Run ReCoreUI build
         run: |
           set -e
 
