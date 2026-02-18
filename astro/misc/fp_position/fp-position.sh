@@ -1,3 +1,5 @@
+# MOD_NAME="FOD Position Fix"
+# MOD_AUTHOR="Brother Board"
 LOG_BEGIN "Injecting FOD bind mount into logd.rc"
 
 LOGD_RC="$WORKSPACE/system/etc/init/logd.rc"
