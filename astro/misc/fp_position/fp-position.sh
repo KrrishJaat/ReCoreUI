@@ -1,24 +1,33 @@
-LOG_BEGIN "Applying Fingerprint Patch"
+LOG_BEGIN "Injecting FOD bind mount into logd.rc"
 
-while IFS= read -r -d '' RCFILE; do
-    LOG_INFO "Patching $(basename "$RCFILE")"
+LOGD_RC="$WORKSPACE/system/etc/init/logd.rc"
 
-    # Skip if already patched
-    if grep -q "fingerprint/fingerprint/position" "$RCFILE"; then
-        LOG_INFO "Already patched, skipping"
-        continue
-    fi
+if [ ! -f "$LOGD_RC" ]; then
+    LOG_ERROR "logd.rc not found!"
+    exit 1
+fi
 
-    # Insert mount line before start logd-auditctl
-    sed -i '/on property:sys.boot_completed=1/,/start logd-auditctl/{
-        /start logd-auditctl/i\    exec /system/bin/mount -o bind /sys/power/pm_async /sys/devices/virtual/fingerprint/fingerprint/position
-    }' "$RCFILE"
+# Skip if already patched
+if grep -q "fingerprint/fingerprint/position" "$LOGD_RC"; then
+    LOG_INFO "Already patched, skipping"
+else
+    awk '
+    BEGIN { done=0 }
+    /^on property:sys.boot_completed=1/ {
+        print
+        print "    exec /system/bin/mount -o bind /sys/power/pm_async /sys/devices/virtual/fingerprint/fingerprint/position"
+        done=1
+        next
+    }
+    { print }
+    END {
+        if (done==0) {
+            print ""
+            print "on property:sys.boot_completed=1"
+            print "    exec /system/bin/mount -o bind /sys/power/pm_async /sys/devices/virtual/fingerprint/fingerprint/position"
+        }
+    }
+    ' "$LOGD_RC" > "$LOGD_RC.tmp" && mv "$LOGD_RC.tmp" "$LOGD_RC"
 
     LOG_INFO "Bind mount injected successfully"
-
-done < <(
-    find "$WORKSPACE/system/etc/init" "$WORKSPACE/vendor/etc/init" \
-        -type f \
-        -name "logd.rc" \
-        -print0 2>/dev/null
-)
+fi
