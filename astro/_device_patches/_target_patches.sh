@@ -15,16 +15,16 @@ FF_IF_DIFF "stock" "SYSTEM_CONFIG_SIOP_POLICY_FILENAME"
 BPROP "system" "ro.product.system.model" "$DEVICE_MODEL"
 BPROP "system" "ro.product.product.model" "$DEVICE_MODEL"
 
-ASTRO_CODENAME="$(GET_PROP "system" "ro.product.system.name" "stock")"
+RECORE_CODENAME="$(GET_PROP "system" "ro.product.system.name" "stock")"
 
-if [[ -n "$ASTRO_CODENAME" ]]; then
-    BPROP "system" "ro.astro.codename" "$ASTRO_CODENAME"
+if [[ -n "$RECORE_CODENAME" ]]; then
+    BPROP "system" "ro.recore.codename" "$RECORE_CODENAME"
 else
-    BPROP "system" "ro.astro.codename" "$CODENAME"
+    BPROP "system" "ro.recore.codename" "$CODENAME"
 fi
 
 # Set source model as new prop
-BPROP "system" "ro.product.astro.model" "$DEVICE_MODEL"
+BPROP "system" "ro.product.recore.model" "$DEVICE_MODEL"
 
 # Edge lighting target corner radius
 BPROP "system" "ro.factory.model" "$DEVICE_MODEL"
