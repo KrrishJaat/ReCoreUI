@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-#  Copyright (c) 2025 Sameer Al Sahab
+#  Copyright (c) 2026 Krrish Jaat
 #  Licensed under the MIT License. See LICENSE file for details.
 #
 #  Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -58,8 +58,24 @@ CREATE_FLASHABLE_ZIP()
 
     UPDATER_SCRIPT_PATH="${ZIP_BUILD_DIR}/META-INF/com/google/android/updater-script"
 
-    if [[ -f "${ZIP_BUILD_DIR}/boot.img" ]]; then
-        EXTRA_BLOCKS+=$'\nui_print "Installing Kernel...";\nupdate_zip boot.img $(find_block boot);'
+    if [[ -f "${ZIP_BUILD_DIR}/boot.img" || \
+      -f "${ZIP_BUILD_DIR}/vendor_boot.img" || \
+      -f "${ZIP_BUILD_DIR}/init_boot.img" || \
+      -f "${ZIP_BUILD_DIR}/dtbo.img" ]]; then
+
+       EXTRA_BLOCKS+=$'\nui_print "Installing Kernel...";'
+
+       [[ -f "${ZIP_BUILD_DIR}/boot.img" ]] && \
+        EXTRA_BLOCKS+=$'\nupdate_zip boot.img $(find_block boot);'
+
+       [[ -f "${ZIP_BUILD_DIR}/vendor_boot.img" ]] && \
+        EXTRA_BLOCKS+=$'\nupdate_zip vendor_boot.img $(find_block vendor_boot);'
+
+       [[ -f "${ZIP_BUILD_DIR}/init_boot.img" ]] && \
+        EXTRA_BLOCKS+=$'\nupdate_zip init_boot.img $(find_block init_boot);'
+
+       [[ -f "${ZIP_BUILD_DIR}/dtbo.img" ]] && \
+        EXTRA_BLOCKS+=$'\nupdate_zip dtbo.img $(find_block dtbo);'
     fi
 
     if [[ -f "${ZIP_BUILD_DIR}/optics.img" ]]; then
@@ -68,10 +84,6 @@ CREATE_FLASHABLE_ZIP()
 
     if [[ -f "${ZIP_BUILD_DIR}/prism.img" ]]; then
         EXTRA_BLOCKS+=$'\nui_print "Installing Prism...";\nupdate_zip prism.img $(find_block prism);'
-    fi
-
-    if [[ -f "${ZIP_BUILD_DIR}/dtbo.img" ]]; then
-        EXTRA_BLOCKS+=$'\nui_print "Installing DTBO...";\nupdate_zip dtbo.img $(find_block dtbo);'
     fi
 
     if [[ -f "${ZIP_BUILD_DIR}/up_param.bin" ]]; then
