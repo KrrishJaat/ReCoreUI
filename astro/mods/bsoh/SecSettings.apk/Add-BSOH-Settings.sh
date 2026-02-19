@@ -2,9 +2,9 @@
 
 BOMB_MODEL="SM-A236B"
 OLD_PROP="ro.product.model"
-NEW_PROP="ro.product.astro.model"
+NEW_PROP="ro.product.recore.model"
 
-BPROP "system" "ro.product.astro.model" "$STOCK_MODEL"
+BPROP "system" "ro.product.recore.model" "$STOCK_MODEL"
 
 LOG_BEGIN "Adding BSOH Settings.."
 
