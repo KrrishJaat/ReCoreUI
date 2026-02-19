@@ -186,7 +186,12 @@ _BUILD_ROM()
 
     if [[ -n "$PLATFORM" ]]; then
         PLATFORM_DIR="$RECOREUI/platform/$PLATFORM"
-        LAYERS+=("$PLATFORM_DIR")
+        [[ -d "$PLATFORM_DIR" ]] && LAYERS+=("$PLATFORM_DIR")
+    fi
+
+    if [[ -n "$CODENAME" ]]; then
+        DEVICE_DIR="$RECOREUI/platform/$CODENAME"
+        [[ -d "$DEVICE_DIR" ]] && LAYERS+=("$DEVICE_DIR")
     fi
 
     LAYERS+=(
