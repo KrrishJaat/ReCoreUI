@@ -1,0 +1,11 @@
+
+on boot
+    setprop service.media.powersnd 1
+    start powersound
+
+service powersound /system/bin/samsungpowersoundplay
+    class main
+    user audioserver
+    group system
+    disabled
+    oneshot

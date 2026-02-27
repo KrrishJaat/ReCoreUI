@@ -1,0 +1,33 @@
+#MAGISK
+setdefault   import_addons        on
+setdefault   extraction_speed     default
+
+#ReCoreUI script starts here:
+ui_print " "
+ui_print "Welcome to ReCoreUI Installer!"
+ui_print " "
+ui_print "ReCoreUI  __ROM_VERSION__  for __MODEL_NAME__  "
+ui_print " "
+ui_print "ReCoreUI is coded by @KrrishJaat "
+ui_print " "
+ui_print "Build: __BUILD_DATE__"
+
+# Install
+   ui_print "Installing ROM.... .It will take some time."
+   ui_print "Do not cancel or force reboot until installation is complete."
+
+   update_zip super.img $(find_block super)
+
+__EXTRA_ASSERTS__
+
+   ui_print "ReCoreUI successfully installed."
+
+
+# Ending
+   ui_print " If you want to reboot to recovery, press vol + "
+   ui_print " If you want to close the installer, press vol - "
+   if $yes; then
+      run_program "$addons/reboot" recovery
+   else
+      end "Installer closed... "
+   fi
