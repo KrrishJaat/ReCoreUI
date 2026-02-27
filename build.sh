@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-#  Copyright (c) 2025 Sameer Al Sahab
+#  Copyright (c) 2026 Krrish Jaat
 #  Licensed under the MIT License. See LICENSE file for details.
 #
 #  Permission is hereby granted, free of charge, to any person obtaining a copy
