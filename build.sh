@@ -194,6 +194,11 @@ _BUILD_ROM()
         [[ -d "$DEVICE_DIR" ]] && LAYERS+=("$DEVICE_DIR")
     fi
 
+    if [[ -n "$RECORE_CODENAME" ]]; then
+        DEVICE_DIR="$RECOREUI/platform/$RECORE_CODENAME"
+        [[ -d "$DEVICE_DIR" ]] && LAYERS+=("$DEVICE_DIR")
+    fi
+
     LAYERS+=(
         "$PROJECT_DIR"
         "$OBJECTIVE"
