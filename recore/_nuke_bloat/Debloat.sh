@@ -169,12 +169,9 @@ SILENT REMOVE "system" "etc/permissions/signature-permissions-com.sec.android.mi
 
 #  SAMSUNG APPS (Calendar, Clock, Free, Notes, Browser & Reminder)
 BLOAT_TARGETS+=(
-    "SamsungCalendar"
-    "ClockPackage"
     "MinusOnePage"            # Samsung Free
     "SmartReminder"
     "OfflineLanguageModel_stub"
-    "Notes40"
     "SBrowser"
 )
 
