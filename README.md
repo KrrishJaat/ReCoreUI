@@ -46,6 +46,8 @@ To provide a modular, device-adaptive OneUI port framework that can patch suppor
 - Enables some hidden device features
 - And many more!
 
+\* DeX via HDMI not available for devices without USB-C DP support
+
 ### CSC Features
 - Network speed Meter
 - AppLock support
@@ -69,6 +71,9 @@ This project wouldn't be possible without the incredible work of:
 - **[jesec](https://github.com/jesec)** - For samfirm.js , which we use to download the latest firmwares.
 - **[3arthur6](https://github.com/3arthur6)** - For bluetooth library patcher.
 - **[soulr344](https://github.com/soulr344/OMCDecoder)** - For omc decoder.
+- **[Pritam](https://github.com/nostalgiceagle)** - For fp patch.
+- **[Hunter](https://github.com/devhunter1)** - For Exynos 1330 Kernel.
+- **Thanks to Testers too**
 ---
 
 ## Licensing
