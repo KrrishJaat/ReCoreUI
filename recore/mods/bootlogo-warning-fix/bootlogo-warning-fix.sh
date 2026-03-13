@@ -2,8 +2,9 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Paths
-PARAM_DIR="$SCRIPT_DIR/../blobs/param"
+# Correct path
+PARAM_DIR="$SCRIPT_DIR/blobs/param"
+
 DEST_DIR="$OUT"
 
 # fallback if OUT not defined
@@ -13,7 +14,6 @@ fi
 
 mkdir -p "$DEST_DIR"
 
-# Decide which file to copy
 if [ "$DEVICE_SINGLE_SYSTEM_IMAGE" = "essi" ]; then
     SRC_FILE="$PARAM_DIR/up_param_1080p.bin"
 elif [ "$DEVICE_SINGLE_SYSTEM_IMAGE" = "essi64" ]; then
@@ -22,7 +22,8 @@ else
     SRC_FILE="$PARAM_DIR/up_param_1080p.bin"
 fi
 
-# Check file
+echo "Looking for: $SRC_FILE"
+
 if [ -f "$SRC_FILE" ]; then
     echo "Copying $(basename "$SRC_FILE") to $DEST_DIR"
     cp -f "$SRC_FILE" "$DEST_DIR/"
