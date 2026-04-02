@@ -4,7 +4,7 @@ BOMB_MODEL="SM-A236B"
 OLD_PROP="ro.product.model"
 NEW_PROP="ro.product.recore.model"
 
-BPROP "system" "ro.product.recore.model" "$STOCK_MODEL"
+BPROP "system" "ro.product.recore.model" "SM-S938B"
 
 LOG_BEGIN "Adding BSOH Settings.."
 
