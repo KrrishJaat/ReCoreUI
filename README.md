@@ -73,6 +73,7 @@ This project wouldn't be possible without the incredible work of:
 - **[soulr344](https://github.com/soulr344/OMCDecoder)** - For omc decoder.
 - **[Pritam](https://github.com/nostalgiceagle)** - For fp patch.
 - **[Hunter](https://github.com/devhunter1)** - For Exynos 1330 Kernel.
+-
 **[Majaahh](https://github.com/majaahh)** - Gay Trans Polish Kid 
 - **Thanks to Testers too**
 ---
