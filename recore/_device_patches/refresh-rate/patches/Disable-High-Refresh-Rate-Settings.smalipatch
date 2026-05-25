@@ -1,4 +1,4 @@
-FILE smali_classes4/com/samsung/android/settings/display/controller/HighRefreshRatePreferenceController.smali
+FILE smali_classes5/com/samsung/android/settings/display/controller/HighRefreshRatePreferenceController.smali
 
 REPLACE .method public getAvailabilityStatus()I
     .locals 1
