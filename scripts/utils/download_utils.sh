@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-#  Copyright (c) 2026 Krrish Jaat
+#  Copyright (c) 2025 Sameer Al Sahab
 #  Licensed under the MIT License. See LICENSE file for details.
 #
 #  Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -17,7 +17,7 @@
 
 
 # [
-FW_DIR="${ASTROROM}/firmware"
+FW_DIR="${RECOREUI}/firmware"
 FW_BASE="${FW_DIR}/downloaded"
 
 
@@ -34,11 +34,11 @@ DOWNLOAD_FW() {
     declare -A PROCESSED_MODELS
 
     for CONFIG_ENTRY in \
-        "MAIN|$MODEL|$CSC|$IMEI" \
-        "EXTRA|$EXTRA_MODEL|$EXTRA_CSC|${EXTRA_IMEI:-$IMEI}" \
-        "STOCK|$STOCK_MODEL|$STOCK_CSC|$STOCK_IMEI"
+        "MAIN|$MODEL|$CSC" \
+        "EXTRA|$EXTRA_MODEL|$EXTRA_CSC" \
+        "STOCK|$STOCK_MODEL|$STOCK_CSC"
     do
-        IFS="|" read -r FW_PREFIX DEVICE_MODEL REGION_CODE DEVICE_IMEI <<< "$CONFIG_ENTRY"
+        IFS="|" read -r FW_PREFIX DEVICE_MODEL REGION_CODE <<< "$CONFIG_ENTRY"
 
         [[ -z "$DEVICE_MODEL" || -z "$REGION_CODE" ]] && continue
 
@@ -49,13 +49,18 @@ DOWNLOAD_FW() {
         [[ -v "PROCESSED_MODELS[$DEVICE_MODEL]" ]] && continue
         PROCESSED_MODELS["$DEVICE_MODEL"]=1
 
+        local PORT_VERSION=""
+        if [[ "${FW_PREFIX,,}" == "main" && -n "${PORT_FIRMWARE:-}" ]]; then
+            PORT_VERSION="$PORT_FIRMWARE"
+        fi
+
         FETCH_FW \
             "$FW_PREFIX" \
             "$DEVICE_MODEL" \
             "$REGION_CODE" \
-            "$DEVICE_IMEI" \
             "$FW_BASE" \
-            "$TEMP_DOWNLOAD_DIR"
+            "$TEMP_DOWNLOAD_DIR" \
+            "$PORT_VERSION"
     done
 
     rm -rf "$TEMP_DOWNLOAD_DIR"
@@ -66,9 +71,9 @@ FETCH_FW() {
     local FW_PREFIX="$1"
     local DEVICE_MODEL="$2"
     local REGION_CODE="$3"
-    local DEVICE_IMEI="$4"
-    local BASE_DIR="$5"
-    local TEMP_DIR="$6"
+    local BASE_DIR="$4"
+    local TEMP_DIR="$5"
+    local PORT_VERSION="${6:-}"
 
     local TARGET_DIR="${BASE_DIR}/${DEVICE_MODEL}_${REGION_CODE}"
     local METADATA_FILE="${TARGET_DIR}/firmware.info"
@@ -102,26 +107,41 @@ FETCH_FW() {
 
     if echo "$VERSION_XML" | grep -q '<latest'; then
         ANDROID_VERSION=$(echo "$VERSION_XML" | grep -oP '<latest o="\K\d+' | head -1)
-        SIMPLE_VERSION=$(echo "$VERSION_XML" | grep -oP '<latest o="\d+">\K[^<]+' | head -1)
+        LATEST_VERSION=$(echo "$VERSION_XML" | grep -oP '<latest o="\d+">\K[^<]+' | head -1)
+    fi
+
+    if [[ -n "$PORT_VERSION" ]]; then
+        SIMPLE_VERSION="$PORT_VERSION"
+        FULL_VERSION="$PORT_VERSION"
+        LOG_INFO "Requested firmware version: $PORT_VERSION"
+    else
+        SIMPLE_VERSION="$LATEST_VERSION"
         FULL_VERSION="${ANDROID_VERSION}_${SIMPLE_VERSION}"
-    fi
 
-    if [[ -z "$FULL_VERSION" ]]; then
-        if [[ "$HAS_LOCAL_FIRMWARE" == true ]]; then
-            LOG_INFO "Cannot connect to the internet. Using existing local firmware."
-            return 0
+        if [[ -z "$SIMPLE_VERSION" || -z "$FULL_VERSION" ]]; then
+            if [[ "$HAS_LOCAL_FIRMWARE" == true ]]; then
+                LOG_INFO "Cannot determine latest firmware. Using existing local firmware."
+                return 0
+            fi
+            ERROR_EXIT "Could not determine latest firmware for $DEVICE_MODEL ($REGION_CODE)"
         fi
-        ERROR_EXIT "No internet connection and existing firmware found for $DEVICE_MODEL ($REGION_CODE)"
-    fi
 
-    LOG_INFO "Latest version: $SIMPLE_VERSION (Android $ANDROID_VERSION)"
+        LOG_INFO "Latest version: $SIMPLE_VERSION (Android $ANDROID_VERSION)"
+    fi
 
     local CURRENT_VERSION=""
     [[ -f "$METADATA_FILE" ]] && CURRENT_VERSION=$(<"$METADATA_FILE")
 
-    if [[ "$CURRENT_VERSION" == "$FULL_VERSION" && "$HAS_LOCAL_FIRMWARE" == true ]]; then
-        LOG_END "$FW_PREFIX firmware is up to date/latest ($SIMPLE_VERSION)"
-        return 0
+    if [[ "$HAS_LOCAL_FIRMWARE" == true ]]; then
+        if [[ -n "$PORT_VERSION" ]]; then
+            if [[ "$CURRENT_VERSION" == "$PORT_VERSION" ]]; then
+                LOG_END "$FW_PREFIX firmware is already at requested version ($PORT_VERSION)"
+                return 0
+            fi
+        elif [[ "$CURRENT_VERSION" == "$FULL_VERSION" ]]; then
+            LOG_END "$FW_PREFIX firmware is up to date/latest ($SIMPLE_VERSION)"
+            return 0
+        fi
     fi
 
     local USER_PROMPT
@@ -139,7 +159,24 @@ FETCH_FW() {
 
     (
         cd "$TEMP_DIR" || exit 1
-        "$PREBUILTS/samfirm/samfirm.js" -m "$DEVICE_MODEL" -r "$REGION_CODE" -i "$DEVICE_IMEI"
+        local SAMLOADER_ARGS=(
+            download
+            --model "$DEVICE_MODEL"
+            --region "$REGION_CODE"
+        )
+
+        if [[ -n "$PORT_VERSION" ]]; then
+            LOG_INFO "Samloader: downloading requested version $PORT_VERSION"
+            SAMLOADER_ARGS+=(--version "$PORT_VERSION")
+        else
+            LOG_INFO "Samloader: downloading latest firmware"
+        fi
+
+        SAMLOADER_ARGS+=(-o "firmware.zip")
+
+        "$PREBUILTS/samloader/samloader" "${SAMLOADER_ARGS[@]}"
+        unzip "firmware.zip" -d "$FW_OUTPUT_DIR"
+        rm -f "firmware.zip"
     )
 
     if [[ $? -ne 0 ]]; then
