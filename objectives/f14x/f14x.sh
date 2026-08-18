@@ -5,14 +5,13 @@ PLATFORM="ex_1330"
 # Stock firmware details for download
 STOCK_MODEL="SM-E146B"
 STOCK_CSC="INS"
-STOCK_IMEI="356412388142728"
 
 # Source firmware details for download
 MODEL="SM-S711B"
 CSC="INS"
-IMEI="350411870309841"
 
 # Extra firmware (Optional) details for download
+PORT_FIRMWARE="S711BXXSFFZD2"
 EXTRA_MODEL=""
 EXTRA_CSC=""
 EXTRA_IMEI=""
