@@ -72,7 +72,7 @@ This project wouldn't be possible without the incredible work of:
 - **[3arthur6](https://github.com/3arthur6)** - For bluetooth library patcher.
 - **[soulr344](https://github.com/soulr344/OMCDecoder)** - For omc decoder.
 - **[Pritam](https://github.com/nostalgiceagle)** - For fp patch.
-- **[Hunter](https://github.com/devhunter1)** - For Exynos 1330 Kernel.
+- **[Hunter](https://github.com/devhunter1)** - For Exynos 1330 [Kernel](https://github.com/devhunter1/android_kernel_samsung_s5e8535).
 - **[Majaahh](https://github.com/majaahh)** - Gay Trans Polish Kid 
 - **Thanks to Testers too**
 ---
