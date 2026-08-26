@@ -36,7 +36,7 @@ DECOMPILE_RES=true
 APK_TO_DECOMPILE_RES=(
     product_overlay.apk
     #wallpaper-res.apk
-    #SecSettings.apk
+    SecSettings.apk
     #SystemUI.apk
 )
 

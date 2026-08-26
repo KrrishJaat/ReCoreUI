@@ -1,0 +1,17 @@
+# Always show the One UI minor version number in the About Phone screen.
+# Ported from UN1CA's customize.sh (was applied via SMALI_PATCH ... "replace",
+# scoped to the isDeviceWithMicroVersion()Z method).
+#
+# Implemented here as a whole-file FIND_REPLACE instead of a method-scoped
+# PATCH, since we don't have this controller's real modifiers/visibility to
+# build an exact `.method ...` match against (needed to anchor a PATCH block).
+# `move-result p0` immediately followed by `return p0` is very unlikely to
+# occur more than once in a small single-purpose PreferenceController, but if
+# this file build-fails or the change lands in the wrong spot, open the
+# decompiled OneUIVersionPreferenceController.smali, confirm
+# isDeviceWithMicroVersion()Z is the only place with that pattern, and convert
+# this to a method-scoped PATCH using the real `.method ...` declaration line.
+
+FILE smali_classes4/com/samsung/android/settings/deviceinfo/softwareinfo/OneUIVersionPreferenceController.smali
+FIND_REPLACE "move-result p0" "const/4 p0, 0x1"
+END
