@@ -27,6 +27,16 @@ DEFAULT_SDK="36"  #branch sixteen
 
 PATCH_MARKER_FILE="$WORKSPACE/.patch_markers"
 
+# ReCoreUI host compatibility: xxd may not be installed.
+DEX_HEX_BYTES() {
+    local FILE="$1"
+    if command -v xxd >/dev/null 2>&1; then
+        xxd -s 4 -l 4 -p "$FILE"
+    else
+        od -An -tx1 -N4 -j4 "$FILE" | tr -d ' \n'
+    fi
+}
+
 DO_SIGN_APK="false"  # coz disabled apk signature verification on framework.jar as of now
 CERT_PEM=""
 CERT_PK8=""
@@ -126,7 +136,7 @@ DECOMPILE()
 
     if unzip -p "$FILE" "classes.dex" > "$TEMP_DEX" 2>/dev/null; then
         API=$(GET_DEX_API "$TEMP_DEX")
-        DEX_MAGIC=$(xxd -s 4 -l 4 -p "$TEMP_DEX")
+        DEX_MAGIC=$(DEX_HEX_BYTES "$TEMP_DEX")
     fi
     rm -f "$TEMP_DEX"
 
@@ -355,7 +365,7 @@ BUILD_ALL()
 GET_DEX_API()
 {
     local DEX_FILE="$1"
-    local HEX_SIG=$(xxd -s 4 -l 4 -p "$DEX_FILE")
+    local HEX_SIG=$(DEX_HEX_BYTES "$DEX_FILE")
 
     case "$HEX_SIG" in
         "30333500") echo "23" ;;
