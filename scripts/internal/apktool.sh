@@ -53,7 +53,6 @@ DEX_HEX_BYTES()
     fi
 }
 
-
 INSTALL_FRAMEWORK()
 {
     local FRAMEWORK_APK="$WORKSPACE/system/system/framework/framework-res.apk"
@@ -151,7 +150,7 @@ DECOMPILE()
 
         # Decompile with --no-src
         java -jar "$PREBUILTS/apktool/apktool.jar" d -api "$API" -f -j "$USABLE_THREADS" \
-            -o "$WORK_DIR" -p "$FRAMEWORK_DIR" -t "$SDK" -s "$FILE" > /dev/null 2>&1 || \
+            -o "$WORK_DIR" -p "$FRAMEWORK_DIR" -t "$SDK" -s "$FILE" || \
             ERROR_EXIT "Decompile failed"
 
         # Baksmali each dex parts
@@ -189,7 +188,7 @@ DECOMPILE()
         fi
 
         # --no-debug-info is equals to baksmali --ac false and other flags and similarly use .locals instead of registers , so we can skip baksmali here.
-        java -jar "$PREBUILTS/apktool/apktool.jar" d --no-debug-info "${FLAGS[@]}" "$FILE" > /dev/null 2>&1 || \
+        java -jar "$PREBUILTS/apktool/apktool.jar" d --no-debug-info "${FLAGS[@]}" "$FILE" || \
             ERROR_EXIT "Decompile failed"
 
 
