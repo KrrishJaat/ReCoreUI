@@ -45,7 +45,6 @@ declare -A PATCH_CACHE
 DEX_HEX_BYTES()
 {
     local FILE="$1"
-
     if command -v xxd >/dev/null 2>&1; then
         xxd -s 4 -l 4 -p "$FILE"
     else
@@ -149,8 +148,8 @@ DECOMPILE()
     if [[ "$DEX_MAGIC" == "30343100" ]]; then
 
         # Decompile with --no-src
-        java -jar "$PREBUILTS/apktool/apktool.jar" d -api "$API" -f -j "$USABLE_THREADS" \
-            -o "$WORK_DIR" -p "$FRAMEWORK_DIR" -t "$SDK" -s "$FILE" || \
+        java -jar "$PREBUILTS/apktool/apktool.jar" d -f -j "$USABLE_THREADS" \
+            -o "$WORK_DIR" -p "$FRAMEWORK_DIR" -t "$SDK" -s "$FILE" > /dev/null 2>&1 || \
             ERROR_EXIT "Decompile failed"
 
         # Baksmali each dex parts
@@ -185,10 +184,16 @@ DECOMPILE()
 
         if ! GET_FEATURE "DECOMPILE_RES" || [[ "$IN_LIST" != "true" ]]; then
             FLAGS+=("-r")
+        else
+            # Samsung Settings resource tables can contain framework/private flag
+            # references (e.g. ringtoneType=0x200). Apktool 3.x's default resolver
+            # can reject these while decoding/building. Lazy resolution preserves
+            # the raw references while still decoding resources normally.
+            FLAGS+=("--res-resolve-mode" "lazy")
         fi
 
         # --no-debug-info is equals to baksmali --ac false and other flags and similarly use .locals instead of registers , so we can skip baksmali here.
-        java -jar "$PREBUILTS/apktool/apktool.jar" d --no-debug-info "${FLAGS[@]}" "$FILE" || \
+        java -jar "$PREBUILTS/apktool/apktool.jar" d --no-debug-info "${FLAGS[@]}" "$FILE" > /dev/null 2>&1 || \
             ERROR_EXIT "Decompile failed"
 
 
@@ -253,7 +258,7 @@ BUILD()
 
     if [[ "$EXT" == "apk" ]]; then
         # -c: Copies original META-INF and manifest (Preserves original structure)
-        APKTOOL_FLAGS+=("-c")
+        APKTOOL_FLAGS+=("--copy-original")
     fi
 
     local BUILD_OUTPUT
