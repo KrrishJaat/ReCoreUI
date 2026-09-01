@@ -27,16 +27,6 @@ DEFAULT_SDK="36"  #branch sixteen
 
 PATCH_MARKER_FILE="$WORKSPACE/.patch_markers"
 
-# ReCoreUI host compatibility: xxd may not be installed.
-DEX_HEX_BYTES() {
-    local FILE="$1"
-    if command -v xxd >/dev/null 2>&1; then
-        xxd -s 4 -l 4 -p "$FILE"
-    else
-        od -An -tx1 -N4 -j4 "$FILE" | tr -d ' \n'
-    fi
-}
-
 DO_SIGN_APK="false"  # coz disabled apk signature verification on framework.jar as of now
 CERT_PEM=""
 CERT_PK8=""
@@ -51,6 +41,18 @@ APK_TO_DECOMPILE_RES=(
 )
 
 declare -A PATCH_CACHE
+
+DEX_HEX_BYTES()
+{
+    local FILE="$1"
+
+    if command -v xxd >/dev/null 2>&1; then
+        xxd -s 4 -l 4 -p "$FILE"
+    else
+        od -An -tx1 -N4 -j4 "$FILE" | tr -d ' \n'
+    fi
+}
+
 
 INSTALL_FRAMEWORK()
 {
