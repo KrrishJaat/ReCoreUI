@@ -53,7 +53,6 @@ DEX_HEX_BYTES()
     fi
 }
 
-
 INSTALL_FRAMEWORK()
 {
     local FRAMEWORK_APK="$WORKSPACE/system/system/framework/framework-res.apk"
@@ -151,7 +150,7 @@ DECOMPILE()
 
         # Decompile with --no-src
         java -jar "$PREBUILTS/apktool/apktool.jar" d -api "$API" -f -j "$USABLE_THREADS" \
-            -o "$WORK_DIR" -p "$FRAMEWORK_DIR" -t "$SDK" -s "$FILE"
+            -o "$WORK_DIR" -p "$FRAMEWORK_DIR" -t "$SDK" -s "$FILE" || \
             ERROR_EXIT "Decompile failed"
 
         # Baksmali each dex parts

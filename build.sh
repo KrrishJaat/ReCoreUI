@@ -16,7 +16,6 @@
 #
 
 set -o pipefail
-set -x
 
 RECOREUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export RECOREUI
