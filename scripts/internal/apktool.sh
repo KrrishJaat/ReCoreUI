@@ -25,6 +25,15 @@
 
 DEFAULT_SDK="36"  #branch sixteen
 
+DEX_HEX_BYTES() {
+    local FILE="$1"
+    if command -v xxd >/dev/null 2>&1; then
+        xxd -s 4 -l 4 -p "$FILE"
+    else
+        od -An -tx1 -N4 -j4 "$FILE" | tr -d ' \n'
+    fi
+}
+
 PATCH_MARKER_FILE="$WORKSPACE/.patch_markers"
 
 DO_SIGN_APK="false"  # coz disabled apk signature verification on framework.jar as of now
@@ -41,18 +50,6 @@ APK_TO_DECOMPILE_RES=(
 )
 
 declare -A PATCH_CACHE
-
-DEX_HEX_BYTES()
-{
-    local FILE="$1"
-
-    if command -v xxd >/dev/null 2>&1; then
-        xxd -s 4 -l 4 -p "$FILE"
-    else
-        od -An -tx1 -N4 -j4 "$FILE" | tr -d ' \n'
-    fi
-}
-
 
 INSTALL_FRAMEWORK()
 {
@@ -150,7 +147,7 @@ DECOMPILE()
     if [[ "$DEX_MAGIC" == "30343100" ]]; then
 
         # Decompile with --no-src
-        java -jar "$PREBUILTS/apktool/apktool.jar" d -api "$API" -f -j "$USABLE_THREADS" \
+        java -jar "$PREBUILTS/apktool/apktool.jar" d -f -j "$USABLE_THREADS" \
             -o "$WORK_DIR" -p "$FRAMEWORK_DIR" -t "$SDK" -s "$FILE" > /dev/null 2>&1 || \
             ERROR_EXIT "Decompile failed"
 
@@ -254,7 +251,7 @@ BUILD()
 
     if [[ "$EXT" == "apk" ]]; then
         # -c: Copies original META-INF and manifest (Preserves original structure)
-        APKTOOL_FLAGS+=("-c")
+        APKTOOL_FLAGS+=("--copy-original")
     fi
 
     local BUILD_OUTPUT
