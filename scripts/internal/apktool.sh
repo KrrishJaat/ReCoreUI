@@ -23,7 +23,7 @@
 # https://github.com/SameerAlSahab/smali_patch/blob/main/smali_patch.py
 # https://github.com/iBotPeaches/Apktool/issues/1775
 
-DEFAULT_SDK="36"  #branch sixteen
+DEFAULT_SDK="36"  # branch sixteen
 
 DEX_HEX_BYTES()
 {
@@ -53,6 +53,11 @@ APK_TO_DECOMPILE_RES=(
 
 declare -A PATCH_CACHE
 
+# ReCoreUI sets WORKSPACE before sourcing this script.
+# Keep Apktool frameworks inside the current workspace so apktool does not
+# fall back to ~/.local/share/apktool/framework.
+FRAMEWORK_DIR="${WORKSPACE}/.apktool/framework"
+
 INSTALL_FRAMEWORK()
 {
     local FRAMEWORK_APK="$WORKSPACE/system/system/framework/framework-res.apk"
@@ -67,16 +72,13 @@ INSTALL_FRAMEWORK()
     [[ ! -f "$FRAMEWORK_APK" ]] && \
         ERROR_EXIT "framework-res.apk missing: $FRAMEWORK_APK"
 
-    # Always refresh the framework.
+    # Always refresh the workspace-local Apktool framework.
     #
-    # Apktool 3.x "if -t 36" creates:
-    #   1-36.apk
+    # Apktool 3.0.3:
+    #   if -t 36 -> creates 1-36.apk
+    #   build     -> resolves package-id 1 through 1.apk
     #
-    # Apktool 3.0.3 "build" does NOT support -t and resolves
-    # framework package-id 1 as:
-    #   1.apk
-    #
-    # Therefore the exact target framework must exist as both.
+    # Therefore the exact target framework must be available as both.
     rm -rf "$FRAMEWORK_DIR"
 
     mkdir -p "$FRAMEWORK_DIR" || \
@@ -93,12 +95,10 @@ INSTALL_FRAMEWORK()
     [[ ! -f "$INSTALLED" ]] && \
         ERROR_EXIT "Framework installation incomplete: $INSTALLED missing"
 
-    # Apktool 3.0.3 BUILD has no -t option.
-    # It looks for package-id 1 as 1.apk.
     cp -f "$INSTALLED" "$FRAMEWORK_DIR/1.apk" || \
         ERROR_EXIT "Failed to prepare Apktool build framework"
 
-    # Make sure both files are exactly identical.
+    # Ensure build framework alias is byte-identical to installed framework.
     cmp -s "$INSTALLED" "$FRAMEWORK_DIR/1.apk" || \
         ERROR_EXIT "Framework alias verification failed"
 
@@ -111,7 +111,8 @@ FIND_TARGET()
 
     # JAR files are at system/framework
     if [[ "$FILE_NAME" == *.jar ]]; then
-        local SYSTEM_DIR=$(GET_PARTITION_PATH "system") || true
+        local SYSTEM_DIR
+        SYSTEM_DIR=$(GET_PARTITION_PATH "system") || true
 
         if [[ -n "$SYSTEM_DIR" && -f "$SYSTEM_DIR/framework/$FILE_NAME" ]]; then
             echo "$SYSTEM_DIR/framework/$FILE_NAME"
@@ -119,12 +120,13 @@ FIND_TARGET()
         fi
     fi
 
-    # As of now , we dont need partition paths except them
+    # As of now, we don't need partition paths except them
     if [[ "$FILE_NAME" == *.apk ]]; then
         local PARTITIONS=("system" "system_ext" "product")
 
         for PART in "${PARTITIONS[@]}"; do
-            local PART_DIR=$(GET_PARTITION_PATH "$PART") || continue
+            local PART_DIR
+            PART_DIR=$(GET_PARTITION_PATH "$PART") || continue
 
             [[ -z "$PART_DIR" || ! -d "$PART_DIR" ]] && continue
 
@@ -135,7 +137,11 @@ FIND_TARGET()
                 [[ ! -d "$PART_DIR/$SUBDIR" ]] && continue
 
                 local FOUND
-                FOUND=$(find "$PART_DIR/$SUBDIR" -maxdepth 3 -name "$FILE_NAME" -print -quit 2>/dev/null)
+                FOUND=$(find "$PART_DIR/$SUBDIR" \
+                    -maxdepth 3 \
+                    -name "$FILE_NAME" \
+                    -print \
+                    -quit 2>/dev/null)
 
                 if [[ -n "$FOUND" ]]; then
                     echo "$FOUND"
@@ -197,7 +203,7 @@ DECOMPILE()
     echo "$SDK" > "$WORK_DIR/.meta/sdk"
 
     # DEX v041 Container Bypass (OneUI 8+).
-    # I saw OneUI8+ uses dex 041 for services.jar
+    # OneUI 8+ uses DEX 041 for services.jar.
     if [[ "$DEX_MAGIC" == "30343100" ]]; then
 
         # Decompile with --no-src
@@ -211,7 +217,7 @@ DECOMPILE()
             "$FILE" > /dev/null 2>&1 || \
             ERROR_EXIT "Decompile failed"
 
-        # Baksmali each dex parts
+        # Baksmali each dex part
         local PART=1
 
         while true; do
@@ -253,7 +259,7 @@ DECOMPILE()
             "-p" "$FRAMEWORK_DIR"
         )
 
-        # Resource decompile for listed APKs we declared on top
+        # Resource decompile for listed APKs
         local IN_LIST="false"
 
         for ITEM in "${APK_TO_DECOMPILE_RES[@]}"; do
@@ -267,16 +273,14 @@ DECOMPILE()
             FLAGS+=("-r")
         fi
 
-        # --no-debug-info is equals to baksmali --ac false and other flags
-        # and similarly use .locals instead of registers, so we can skip
-        # baksmali here.
+        # --no-debug-info is equivalent to the required baksmali flags,
+        # so we don't need to baksmali again here.
         java -jar "$PREBUILTS/apktool/apktool.jar" \
             d \
             --no-debug-info \
             "${FLAGS[@]}" \
             "$FILE" > /dev/null 2>&1 || \
             ERROR_EXIT "Decompile failed"
-
     fi
 
     # Extract extra resources for JARs (Issue found on OneUI6+)
@@ -325,9 +329,8 @@ BUILD()
 
     mkdir -p "$DIST_DIR"
 
-    # IMPORTANT:
-    # Apktool 3.0.3 build does not support -t.
-    # Framework package-id 1 is resolved through 1.apk.
+    # Apktool 3.0.3 BUILD does not support -t.
+    # Package-id 1 is resolved through FRAMEWORK_DIR/1.apk.
     local APKTOOL_FLAGS=(
         "b"
         "-j" "$USABLE_THREADS"
@@ -348,8 +351,7 @@ BUILD()
 
         LOG_WARN "Recompilation failed. Check logs below:"
 
-        # We dont show I: information of progress until get an error.
-        # Same thing -q flag do
+        # Don't show normal I: progress until an error.
         echo "$BUILD_OUTPUT" | sed '/^I:/d'
 
         return 1
@@ -357,7 +359,6 @@ BUILD()
 
     if [[ "$EXT" == "apk" ]]; then
 
-        # Sign the apk if turned on
         if [[ "$DO_SIGN_APK" == "true" ]]; then
 
             LOG_INFO "Signing APK..."
@@ -384,17 +385,19 @@ BUILD()
 
             local ALIGNED="$DIST_DIR/aligned.apk"
 
-            if zipalign -p -f 4 "$BUILT_FILE" "$ALIGNED" > /dev/null 2>&1; then
+            if zipalign -p -f 4 \
+                "$BUILT_FILE" \
+                "$ALIGNED" > /dev/null 2>&1; then
+
                 mv -f "$ALIGNED" "$BUILT_FILE"
+
             else
                 ERROR_EXIT "Apk Zipalign failed."
             fi
-
         fi
     fi
 
     # Add missing resources for JARs [Android14+ bug]
-    # See DECOMPILE function for more info.
     if [[ "$EXT" == "jar" && -d "$WORK_DIR/__res__" ]]; then
         (
             cd "$WORK_DIR/__res__" || \
@@ -417,7 +420,7 @@ BUILD()
     return 0
 }
 
-# For instance , patch failed we will start from scratch
+# For instance, patch failed we will start from scratch.
 RESTORE_TARGET()
 {
     local TARGET_NAME="$1"
@@ -435,7 +438,6 @@ RESTORE_TARGET()
 
     elif [[ "$TARGET_NAME" == *.apk ]]; then
 
-        # As of now , we dont need partition paths except them
         local PARTITIONS=("system/system" "system_ext" "product")
 
         for PART in "${PARTITIONS[@]}"; do
@@ -646,9 +648,7 @@ _APKTOOL_PATCH()
         PATCHES=($(sort -V <<<"${PATCHES[*]}"))
         unset IFS
 
-        # Apply our patches
-        # TODO: show error logs only, will do later
-
+        # Apply patches
         for P in "${PATCHES[@]}"; do
 
             local P_NAME
@@ -662,11 +662,11 @@ _APKTOOL_PATCH()
                     cd "$WORK_DIR" || \
                         ERROR_EXIT "Cannot change directory to $WORK_DIR"
 
-                    # -p1: Strip one leading directory component from file paths.
+                    # -p1: Strip one leading directory component.
                     # -s: Work silently unless an error occurs.
-                    # -f: Force/Ignore bad Prereq patches, assume unreversed.
-                    # -l: Ignore white space changes.
-                    # --dry-run: Test the patch without modifying files.
+                    # -f: Force/Ignore bad Prereq patches.
+                    # -l: Ignore whitespace changes.
+                    # --dry-run: Test patch before modifying files.
 
                     patch \
                         -p1 \
@@ -707,7 +707,6 @@ _APKTOOL_PATCH()
                     ERROR_EXIT "Smali patch failed for $P_NAME"
                 }
             fi
-
         done
 
         # Merge resources and run scripts
