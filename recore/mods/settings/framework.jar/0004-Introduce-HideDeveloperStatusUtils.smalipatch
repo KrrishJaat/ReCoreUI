@@ -1,0 +1,28 @@
+# Converted from the supplied UN1CA unified patch.
+# Source: 0004-Introduce-HideDeveloperStatusUtils.patch
+
+FILE smali_classes3/android/provider/Settings$Global.smali
+PATCH
+    return-object p0
+
+    :cond_1
++     invoke-virtual {p0}, Landroid/content/ContentResolver;->getPackageName()Ljava/lang/String;
++ 
++     move-result-object v0
++ 
++     invoke-static {p0, v0, p1}, Lio/mesalabs/unica/HideDeveloperStatusUtils;->shouldHideDevStatus(Landroid/content/ContentResolver;Ljava/lang/String;Ljava/lang/String;)Z
++ 
++     move-result v0
++ 
++     if-eqz v0, :cond_2
++ 
++     const-string p0, "0"
++ 
++     return-object p0
++ 
++     :cond_2
+    sget-object v0, Landroid/provider/Settings$Global;->sNameValueCache:Landroid/provider/Settings$NameValueCache;
+
+    invoke-virtual {v0, p0, p1, p2}, Landroid/provider/Settings$NameValueCache;->getStringForUser(Landroid/content/ContentResolver;Ljava/lang/String;I)Ljava/lang/String;
+END
+END

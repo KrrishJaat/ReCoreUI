@@ -1,0 +1,25 @@
+# Converted from the supplied UN1CA unified patch.
+# Source: 0002-Introduce-SamsungPropsHooks.patch
+
+FILE smali_classes3/android/os/SemSystemProperties.smali
+PATCH
+.end method
+
+.method public static whitelist get(Ljava/lang/String;)Ljava/lang/String;
+-     .locals 0
++     .locals 1
++ 
++     invoke-static {p0}, Lio/mesalabs/unica/SamsungPropsHooks;->onSystemPropertiesGet(Ljava/lang/String;)Ljava/lang/String;
++ 
++     move-result-object v0
++ 
++     if-eqz v0, :cond_0
++ 
++     return-object v0
+
++     :cond_0
+    invoke-static {p0}, Landroid/os/SystemProperties;->get(Ljava/lang/String;)Ljava/lang/String;
+
+    move-result-object p0
+END
+END

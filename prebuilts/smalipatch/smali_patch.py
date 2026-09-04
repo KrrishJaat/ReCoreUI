@@ -1,427 +1,569 @@
 #!/usr/bin/env python3
 """
-Smalipatcher: A utility tool to apply patches to smali files.
-Reads a .smalipatch file and applies changes to smali code.
+ReCoreUI SmaliPatcher
+=====================
+
+Applies ReCoreUI .smalipatch files to an apktool/baksmali work directory.
+
+Format:
+    AUTHOR <name>
+
+    FILE <relative/path/to/file.smali>
+
+    REPLACE <exact .method declaration>
+        <complete replacement body>
+    END
+
+    FIND_REPLACE "old" "new"
+
+    PATCH [optional exact method declaration]
+        <context line>
+      - <line to remove>
+      + <line to add>
+        <context line>
+    END
+
+Comments beginning with # or // are ignored.
+
+PATCH matching is ordered and exact after conservative whitespace normalization;
+the replacement preserves the patch's context/addition lines and removes only
+the exact old sequence represented by the hunk. This is intentionally stricter
+than the old positional deletion logic so a failed hunk cannot silently corrupt
+a smali file.
 """
 
-import os
-import sys
-import re
+from __future__ import annotations
+
 import argparse
-from typing import List, Tuple, Optional
+import os
+import re
+import sys
+from typing import List, Tuple, Optional, Dict, Any
+
 
 class Colors:
-    """ANSI color codes"""
-    RED = '\033[91m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    RESET = '\033[0m'
+    RED = "\033[91m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    BLUE = "\033[94m"
+    RESET = "\033[0m"
 
     @staticmethod
-    def init():
-
-        if os.name == 'nt':
+    def init() -> None:
+        if os.name == "nt":
             try:
-                import colorama
+                import colorama  # type: ignore
                 colorama.init()
             except ImportError:
                 pass
 
-def log(msg: str, color: str = '', quiet: bool = False):
 
+def log(msg: str, color: str = "", quiet: bool = False) -> None:
     if not quiet:
         print(f"{color}{msg}{Colors.RESET if color else ''}")
 
-def log_error(msg: str):
 
-    print(f"{Colors.RED}{msg}{Colors.RESET}")
+def log_error(msg: str) -> None:
+    print(f"{Colors.RED}{msg}{Colors.RESET}", file=sys.stderr)
 
-def parse_smalipatch(lines: List[str]) -> List[dict]:
 
-    patches = []
+def normalize_line(line: str) -> str:
+    """
+    Normalize only formatting noise that should not affect smali matching.
+
+    We deliberately do not normalize punctuation, labels, register names, or
+    opcodes. Tabs/spaces at the edges and runs of internal whitespace are the
+    only ignored differences.
+    """
+    return re.sub(r"[ \t]+", " ", line.strip())
+
+
+def parse_quoted_args(text: str) -> List[str]:
+    """Parse double-quoted arguments; support \\" and \\\\ without mangling other backslashes."""
+    args: List[str] = []
+    current: List[str] = []
+    in_quote = False
+    escape = False
+
+    for c in text:
+        if not in_quote:
+            if c == '"':
+                in_quote = True
+            continue
+        if escape:
+            if c in ('"', '\\'):
+                current.append(c)
+            else:
+                # Preserve unknown escapes literally.
+                current.append('\\')
+                current.append(c)
+            escape = False
+            continue
+        if c == '\\':
+            escape = True
+            continue
+        if c == '"':
+            args.append("".join(current))
+            current = []
+            in_quote = False
+            continue
+        current.append(c)
+
+    if in_quote:
+        raise ValueError("unterminated quoted argument")
+    return args
+
+
+def read_content_block(lines: List[str], start: int) -> Tuple[List[str], int]:
+    """
+    Read until END or the start of another action/FILE.
+
+    A content line that begins with '+ ' / '- ' is still content and is never
+    treated as an action.
+    """
+    content: List[str] = []
+    i = start
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped == "END":
+            return content, i + 1
+        if stripped.startswith("FILE "):
+            return content, i
+        if stripped.startswith("REPLACE ") or stripped.startswith("PATCH") or stripped.startswith("FIND_REPLACE "):
+            return content, i
+        content.append(lines[i].rstrip("\r\n"))
+        i += 1
+    return content, i
+
+
+def parse_smalipatch(lines: List[str], quiet: bool = False) -> List[Dict[str, Any]]:
+    patches: List[Dict[str, Any]] = []
     i = 0
-
     while i < len(lines):
         line = lines[i].strip()
 
-
-        if not line or line.startswith('#') or line.startswith('//'):
+        if not line or line.startswith("#") or line.startswith("//"):
             i += 1
             continue
 
-
-        if line.startswith('AUTHOR '):
-            author = line[7:].strip()
-            log(f"  Author: {author}", Colors.BLUE)
+        if line.startswith("AUTHOR "):
+            log(f"  Author: {line[7:].strip()}", Colors.BLUE, quiet)
             i += 1
             continue
 
-
-        if line.startswith('FILE '):
+        if line.startswith("FILE "):
             file_path = line[5:].strip()
-            patch = {'type': 'FILE', 'file_path': file_path, 'actions': []}
-            i += 1
+            if not file_path or os.path.isabs(file_path) or ".." in file_path.split("/"):
+                raise ValueError(f"Invalid FILE path: {file_path!r}")
 
+            patch: Dict[str, Any] = {
+                "type": "FILE",
+                "file_path": file_path,
+                "actions": [],
+            }
+            i += 1
 
             while i < len(lines):
                 line = lines[i].strip()
 
-                if not line or line.startswith('#') or line.startswith('//'):
+                if not line or line.startswith("#") or line.startswith("//"):
                     i += 1
                     continue
 
-                if line == 'END' or line.startswith('FILE '):
-                    if line == 'END':
-                        i += 1
+                if line == "END":
+                    i += 1
                     break
 
-                if line.startswith('REPLACE '):
-                    method_sig = line[8:].strip()
-                    content, i = read_content_block(lines, i + 1)
-                    patch['actions'].append({
-                        'type': 'REPLACE',
-                        'method_sig': method_sig,
-                        'content': content
-                    })
-                elif line.startswith('FIND_REPLACE '):
-                    # FIND_REPLACE "old" "new"
-                    parts = parse_quoted_args(line[13:])
-                    if len(parts) == 2:
-                        patch['actions'].append({
-                            'type': 'FIND_REPLACE',
-                            'old': parts[0],
-                            'new': parts[1]
-                        })
-                    i += 1
-                elif line.startswith('PATCH'):
-                    # PATCH or PATCH .method signature
-                    rest = line[5:].strip()
-                    method_sig = rest if rest else None
-                    content, i = read_content_block(lines, i + 1)
-                    patch['actions'].append({
-                        'type': 'PATCH',
-                        'method_sig': method_sig,
-                        'content': content
-                    })
-                else:
-                    i += 1
+                if line.startswith("FILE "):
+                    # Missing END is a syntax error rather than silently
+                    # changing target file.
+                    raise ValueError(
+                        f"FILE {file_path}: missing END before next FILE"
+                    )
 
-            if patch['actions']:
-                patches.append(patch)
-        else:
-            i += 1
+                if line.startswith("REPLACE "):
+                    method_sig = line[8:].strip()
+                    if not method_sig:
+                        raise ValueError(f"FILE {file_path}: REPLACE requires a method signature")
+                    content, i = read_content_block(lines, i + 1)
+                    patch["actions"].append({
+                        "type": "REPLACE",
+                        "method_sig": method_sig,
+                        "content": content,
+                    })
+                    continue
+
+                if line.startswith("FIND_REPLACE "):
+                    parts = parse_quoted_args(line[13:])
+                    if len(parts) != 2:
+                        raise ValueError(
+                            f"FILE {file_path}: FIND_REPLACE requires exactly 2 quoted arguments"
+                        )
+                    patch["actions"].append({
+                        "type": "FIND_REPLACE",
+                        "old": parts[0],
+                        "new": parts[1],
+                    })
+                    i += 1
+                    continue
+
+                if line == "PATCH" or line.startswith("PATCH "):
+                    method_sig = line[5:].strip() or None
+                    content, i = read_content_block(lines, i + 1)
+                    if not content:
+                        raise ValueError(f"FILE {file_path}: empty PATCH block")
+                    patch["actions"].append({
+                        "type": "PATCH",
+                        "method_sig": method_sig,
+                        "content": content,
+                    })
+                    continue
+
+                raise ValueError(f"FILE {file_path}: unknown directive: {line}")
+
+            if not patch["actions"]:
+                raise ValueError(f"FILE {file_path}: no actions")
+            patches.append(patch)
+            continue
+
+        raise ValueError(f"Unexpected directive: {line}")
 
     return patches
 
-def parse_quoted_args(text: str) -> List[str]:
 
-    args = []
-    in_quote = False
-    current = []
-    i = 0
+def method_header_pattern(method_sig: str) -> re.Pattern[str]:
+    return re.compile(r"^\s*" + re.escape(method_sig) + r"\s*$")
 
-    while i < len(text):
-        c = text[i]
-        if c == '"':
-            if in_quote:
-                args.append(''.join(current))
-                current = []
-                in_quote = False
-            else:
-                in_quote = True
-        elif in_quote:
-            if c == '\\' and i + 1 < len(text):
-                current.append(text[i + 1])
-                i += 1
-            else:
-                current.append(c)
-        i += 1
-
-    return args
-
-def read_content_block(lines: List[str], start: int) -> Tuple[List[str], int]:
-
-    content = []
-    i = start
-    keywords = ['END', 'REPLACE ', 'PATCH', 'FIND_REPLACE ', 'FILE ']
-
-    while i < len(lines):
-        line = lines[i]
-        line_strip = line.strip()
-
-        # Check if line starts with a keyword
-        if any(line_strip.startswith(kw) for kw in keywords):
-            break
-
-        content.append(line.rstrip())
-        i += 1
-
-    return content, i
 
 def find_method_range(lines: List[str], method_sig: str) -> Tuple[int, int]:
+    """
+    Return inclusive [start, end] for one method.
 
-    pattern = re.compile(r'^\s*' + re.escape(method_sig))
+    The signature is matched against the complete .method declaration when the
+    smalipatch uses a .method line. If a bare method descriptor/name is supplied,
+    we also accept it when it occurs in a .method declaration.
+    """
+    method_sig = method_sig.strip()
 
+    candidates: List[int] = []
+    exact = method_header_pattern(method_sig)
     for i, line in enumerate(lines):
-        if pattern.match(line):
-            # Find .end method
-            for j in range(i + 1, len(lines)):
-                if lines[j].strip() == '.end method':
-                    return i, j
-            # No .end method found, return line before .end class or EOF
-            for j in range(len(lines) - 1, i, -1):
-                if lines[j].strip().startswith('.end class'):
-                    return i, j - 1
-            return i, len(lines) - 1
+        stripped = line.strip()
+        if exact.match(stripped):
+            candidates.append(i)
+        elif not method_sig.startswith(".method ") and stripped.startswith(".method "):
+            if method_sig in stripped:
+                candidates.append(i)
 
-    return -1, -1
+    if not candidates:
+        return -1, -1
+    if len(candidates) > 1:
+        # A patch should be deterministic. Multiple matches indicate the
+        # descriptor is not specific enough.
+        raise ValueError(f"Method signature is ambiguous: {method_sig}")
 
-def apply_replace(lines: List[str], action: dict, quiet: bool) -> Optional[List[str]]:
+    start = candidates[0]
+    depth = 0
+    for j in range(start, len(lines)):
+        stripped = lines[j].strip()
+        if stripped.startswith(".method "):
+            depth += 1
+        elif stripped == ".end method":
+            depth -= 1
+            if depth == 0:
+                return start, j
 
-    method_sig = action['method_sig']
-    start_idx, end_idx = find_method_range(lines, method_sig)
+    # Malformed smali: don't guess through the class boundary.
+    raise ValueError(f"No .end method found for {method_sig}")
+
+
+def find_sequence(
+    lines: List[str],
+    wanted: List[str],
+    start: int = 0,
+    end: Optional[int] = None,
+) -> Tuple[int, int]:
+    """
+    Find one ordered sequence.
+
+    Non-empty wanted lines must occur in order. Unchanged blank lines are
+    treated as formatting noise and may appear between matched lines. Explicit
+    added/removed blank lines (which are still represented in the replacement
+    sequence) are handled by the caller.
+    """
+    wanted_norm = [normalize_line(x) for x in wanted if normalize_line(x) != ""]
+    if not wanted_norm:
+        return start, start
+
+    end = len(lines) if end is None else end
+    matches: List[Tuple[int, int]] = []
+
+    for i in range(start, end):
+        if normalize_line(lines[i]) != wanted_norm[0]:
+            continue
+
+        pos = i
+        ok = True
+        for wanted_line in wanted_norm[1:]:
+            pos += 1
+            while pos < end and normalize_line(lines[pos]) == "":
+                pos += 1
+            if pos >= end or normalize_line(lines[pos]) != wanted_line:
+                ok = False
+                break
+
+        if ok:
+            matches.append((i, pos + 1))
+
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        return -1, -1
+    raise ValueError(f"Patch context is ambiguous ({len(matches)} matches)")
+
+
+def apply_replace(lines: List[str], action: Dict[str, Any], quiet: bool) -> Optional[List[str]]:
+    method_sig = action["method_sig"]
+    try:
+        start_idx, end_idx = find_method_range(lines, method_sig)
+    except ValueError as exc:
+        log_error(f"  ✗ {exc}")
+        return None
 
     if start_idx == -1:
         log_error(f"  ✗ Method not found: {method_sig}")
         return None
 
+    content = list(action["content"])
 
-    new_lines = lines[:start_idx]
-    new_lines.append(lines[start_idx])
-    new_lines.extend(action['content'])
+    # A REPLACE block describes the method body. Keep the original declaration
+    # unless the block explicitly contains its own .method declaration.
+    if not any(x.lstrip().startswith(".method ") for x in content):
+        content.insert(0, lines[start_idx])
 
+    # The replacement must end with exactly one method terminator.
+    content = [x for x in content if x.strip() != ".end method"]
+    content.append(".end method")
 
-    has_end_method = any(line.strip() == '.end method' for line in action['content'])
-    if not has_end_method:
-        new_lines.append('.end method')
-
-    new_lines.extend(lines[end_idx + 1:])
+    new_lines = lines[:start_idx] + content + lines[end_idx + 1:]
 
     log(f"    ✓ Replaced method at line {start_idx + 1}", Colors.GREEN, quiet)
     return new_lines
 
-def apply_find_replace(lines: List[str], action: dict, quiet: bool) -> Optional[List[str]]:
 
-    old_val = action['old']
-    new_val = action['new']
-    count = 0
+def apply_find_replace(lines: List[str], action: Dict[str, Any], quiet: bool) -> Optional[List[str]]:
+    old_val = action["old"]
+    new_val = action["new"]
 
-    new_lines = []
-    for line in lines:
-        if old_val in line:
-            new_lines.append(line.replace(old_val, new_val))
-            count += 1
-        else:
-            new_lines.append(line)
-
+    count = sum(line.count(old_val) for line in lines)
     if count == 0:
+        # Idempotent behavior: if the requested replacement is already present,
+        # treat the action as successfully applied.
+        if any(new_val in line for line in lines):
+            log("    ✓ Pattern already replaced", Colors.GREEN, quiet)
+            return list(lines)
         log_error(f"  ✗ Pattern not found: {old_val}")
         return None
 
-    log(f"    ✓ Replaced {count} occurrence(s)", Colors.GREEN, quiet)
-    return new_lines
+    if count != 1:
+        log_error(f"  ✗ Pattern is ambiguous: found {count} occurrences of {old_val}")
+        return None
 
-def normalize_line(line: str) -> str:
+    return_lines = [line.replace(old_val, new_val, 1) for line in lines]
+    log(f"    ✓ Replaced 1 occurrence", Colors.GREEN, quiet)
+    return return_lines
 
-    return line.strip()
 
-def apply_patch(lines: List[str], action: dict, quiet: bool) -> Optional[List[str]]:
+def parse_patch_hunk(content: List[str]) -> Tuple[List[str], List[str], List[str]]:
+    """
+    Interpret a PATCH block as an ordered diff.
 
-    content = action['content']
-    method_sig = action.get('method_sig')
+    Returns:
+      old_match      - lines that must be found, ignoring unchanged blanks
+      new_match      - non-empty lines used for idempotency detection
+      replacement    - the exact new context/addition lines to write
+    """
+    old_match: List[str] = []
+    new_match: List[str] = []
+    replacement: List[str] = []
 
-    # Separate context and changes
-    context_lines = []
-    changes = []
-
-    for line in content:
-        if line.startswith('+ '):
-            changes.append(('+', line[2:]))
-        elif line.startswith('- '):
-            changes.append(('-', line[2:]))
+    for raw in content:
+        if raw.startswith("+ "):
+            line = raw[2:]
+            new_match.append(line)
+            replacement.append(line)
+        elif raw.startswith("- "):
+            old_match.append(raw[2:])
+        elif raw.startswith("+"):
+            line = raw[1:]
+            new_match.append(line)
+            replacement.append(line)
+        elif raw.startswith("-"):
+            old_match.append(raw[1:])
         else:
-            context_lines.append(normalize_line(line))
+            # Context is required for matching unless it is a harmless blank.
+            # Keep blanks in replacement but omit them from the matching key.
+            replacement.append(raw)
+            if raw.strip() != "":
+                old_match.append(raw)
+                new_match.append(raw)
 
+    if not old_match and not new_match:
+        raise ValueError("PATCH hunk has no meaningful lines")
+    return old_match, new_match, replacement
+
+
+def apply_patch(lines: List[str], action: Dict[str, Any], quiet: bool) -> Optional[List[str]]:
+    old_seq, new_seq, replacement = parse_patch_hunk(action["content"])
 
     search_start = 0
     search_end = len(lines)
 
+    method_sig = action.get("method_sig")
     if method_sig:
-        start_idx, end_idx = find_method_range(lines, method_sig)
+        try:
+            start_idx, end_idx = find_method_range(lines, method_sig)
+        except ValueError as exc:
+            log_error(f"  ✗ {exc}")
+            return None
         if start_idx == -1:
             log_error(f"  ✗ Method not found: {method_sig}")
             return None
         search_start = start_idx
         search_end = end_idx + 1
 
-    # Find context in file
-    if context_lines:
-        match_idx = -1
-        for i in range(search_start, search_end):
-            # Try to match all context lines
-            matched = True
-            line_idx = i
+    try:
+        match_idx, match_end = find_sequence(lines, old_seq, search_start, search_end)
+    except ValueError as exc:
+        log_error(f"  ✗ {exc}")
+        return None
 
-            for ctx in context_lines:
-                # Skip to next non-empty line
-                while line_idx < search_end and not normalize_line(lines[line_idx]):
-                    line_idx += 1
-
-                if line_idx >= search_end:
-                    matched = False
-                    break
-
-                if normalize_line(lines[line_idx]) != ctx:
-                    matched = False
-                    break
-
-                line_idx += 1
-
-            if matched:
-                match_idx = i
-                break
-
-        if match_idx == -1:
-            log_error(f"  ✗ Context not found")
-            if context_lines:
-                log_error(f"     Looking for: {context_lines[0][:50]}...")
+    if match_idx == -1:
+        # Idempotent behavior: a PATCH may already have been applied.
+        try:
+            applied_idx, applied_end = find_sequence(lines, new_seq, search_start, search_end)
+        except ValueError as exc:
+            log_error(f"  ✗ {exc}")
             return None
+        if applied_idx != -1:
+            log("    ✓ PATCH already applied", Colors.GREEN, quiet)
+            return list(lines)
+
+        log_error("  ✗ Ordered PATCH context not found")
+        log_error(f"     First context: {old_seq[0].strip()[:120]}")
+        return None
+
+    result = lines[:match_idx] + replacement + lines[match_end:]
+    log(f"    ✓ Applied PATCH at line {match_idx + 1}", Colors.GREEN, quiet)
+    return result
 
 
-        new_lines = lines[:match_idx]
+def apply_patch_to_file(work_dir: str, patch: Dict[str, Any], quiet: bool) -> bool:
+    file_path = patch["file_path"]
+    full_path = os.path.normpath(os.path.join(work_dir, file_path))
 
-        for op, line in changes:
-            if op == '+':
-                new_lines.append(line)
-            elif op == '-':
-                pass
+    # Prevent directory traversal even after normalization.
+    work_abs = os.path.abspath(work_dir)
+    full_abs = os.path.abspath(full_path)
+    if os.path.commonpath([work_abs, full_abs]) != work_abs:
+        log_error(f"   Invalid patch path: {file_path}")
+        return False
 
-
-        skip_count = len([c for c in changes if c[0] == '-'])
-        new_lines.extend(lines[match_idx + skip_count:])
-
-        log(f"     Applied patch at line {match_idx + 1}", Colors.GREEN, quiet)
-        return new_lines
-    else:
-
-        new_lines = lines[:]
-        for op, line in changes:
-            if op == '+':
-                new_lines.append(line)
-
-        log(f"     Applied patch", Colors.GREEN, quiet)
-        return new_lines
-
-def apply_patch_to_file(work_dir: str, patch: dict, quiet: bool) -> bool:
-    """Apply a patch to a file"""
-    file_path = patch['file_path']
-    full_path = os.path.join(work_dir, file_path)
-
-    if not os.path.exists(full_path):
+    if not os.path.isfile(full_abs):
         log_error(f"   File not found: {file_path}")
         return False
 
     log(f"  Patching: {file_path}", Colors.YELLOW, quiet)
 
-    # Read file
     try:
-        with open(full_path, 'r', encoding='utf-8') as f:
-            lines = [line.rstrip('\n\r') for line in f.readlines()]
-    except Exception as e:
-        log_error(f"   Failed to read file: {e}")
+        with open(full_abs, "r", encoding="utf-8", newline="") as f:
+            # Keep line contents; normalize only line endings.
+            lines = [line.rstrip("\r\n") for line in f.readlines()]
+    except Exception as exc:
+        log_error(f"   Failed to read file: {exc}")
         return False
 
-    # Apply each action
-    modified = False
-    for i, action in enumerate(patch['actions']):
-        action_type = action['type']
-
-        if action_type == 'REPLACE':
+    for idx, action in enumerate(patch["actions"], start=1):
+        action_type = action["type"]
+        if action_type == "REPLACE":
             result = apply_replace(lines, action, quiet)
-        elif action_type == 'FIND_REPLACE':
+        elif action_type == "FIND_REPLACE":
             result = apply_find_replace(lines, action, quiet)
-        elif action_type == 'PATCH':
+        elif action_type == "PATCH":
             result = apply_patch(lines, action, quiet)
         else:
             log_error(f"   Unknown action type: {action_type}")
             return False
 
         if result is None:
-            log_error(f"   Hunk failed at action {i + 1}")
+            log_error(f"   ✗ Action {idx} failed")
             return False
-
         lines = result
-        modified = True
 
-    # Write file
-    if modified:
-        try:
-            with open(full_path, 'w', encoding='utf-8', newline='\n') as f:
-                f.write('\n'.join(lines) + '\n')
-            log(f" File patched successfully", Colors.GREEN, quiet)
-        except Exception as e:
-            log_error(f" Failed to write file {e}")
-            return False
+    # Write only after every action has succeeded: a failed multi-action FILE
+    # leaves the original file untouched.
+    try:
+        with open(full_abs, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception as exc:
+        log_error(f"   Failed to write file: {exc}")
+        return False
 
+    log("   ✓ File patched successfully", Colors.GREEN, quiet)
     return True
 
-def main():
-    parser = argparse.ArgumentParser(
-        description='Smalipatcher: Apply patches to smali files',
-        formatter_class=argparse.RawTextHelpFormatter
-    )
-    parser.add_argument('work_dir', help='Root directory containing smali files')
-    parser.add_argument('patch_file', help='Path to .smalipatch file')
-    parser.add_argument('-q', '--quiet', action='store_true',
-                       help='Quiet mode (only show errors)')
 
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="ReCoreUI SmaliPatcher: apply .smalipatch files to decoded smali",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    parser.add_argument("work_dir", help="Root directory containing decoded smali")
+    parser.add_argument("patch_file", help="Path to .smalipatch file")
+    parser.add_argument("-q", "--quiet", action="store_true",
+                        help="Quiet mode (only errors)")
     args = parser.parse_args()
 
     Colors.init()
 
-    # Validate inputs
     if not os.path.isdir(args.work_dir):
-        log_error(f"ERROR: Directory not found {args.work_dir}")
+        log_error(f"ERROR: Directory not found: {args.work_dir}")
         sys.exit(1)
 
     if not os.path.isfile(args.patch_file):
-        log_error(f"ERROR: Patch file not found {args.patch_file}")
+        log_error(f"ERROR: Patch file not found: {args.patch_file}")
         sys.exit(1)
-
 
     try:
-        with open(args.patch_file, 'r', encoding='utf-8') as f:
-            lines = [line.rstrip('\n\r') for line in f.readlines()]
-    except Exception as e:
-        log_error(f"ERROR: Failed to read patch file: {e}")
+        with open(args.patch_file, "r", encoding="utf-8") as f:
+            raw_lines = f.read().splitlines()
+        patches = parse_smalipatch(raw_lines, quiet=args.quiet)
+    except Exception as exc:
+        log_error(f"ERROR: Invalid .smalipatch: {exc}")
         sys.exit(1)
 
-    # Parse patches
-    patches = parse_smalipatch(lines)
-
     if not patches:
-        log_error("ERROR: No valid patches found")
+        log_error("ERROR: No valid FILE blocks found")
         sys.exit(1)
 
     log(f"Found {len(patches)} file(s) to patch", Colors.BLUE, args.quiet)
-    log("=" * 50, '', args.quiet)
+    log("=" * 50, quiet=args.quiet)
 
-    # Apply patches
     success_count = 0
     for patch in patches:
         if apply_patch_to_file(args.work_dir, patch, args.quiet):
             success_count += 1
-        log("", '', args.quiet)
+        else:
+            # Fail-fast: partial application of a multi-file patch package is
+            # dangerous. Caller can discard the entire work directory.
+            log_error("Stopping after first failed FILE block")
+            sys.exit(1)
+
+    log("=" * 50, quiet=args.quiet)
+    log(f"✓ Success: {success_count}/{len(patches)} files patched",
+        Colors.GREEN, args.quiet)
+    sys.exit(0)
 
 
-    log("=" * 50, '', args.quiet)
-    if success_count == len(patches):
-        log(f" Success: {success_count}/{len(patches)} files patched", Colors.GREEN, args.quiet)
-        sys.exit(0)
-    else:
-        log_error(f" Failed: {success_count}/{len(patches)} files patched")
-        sys.exit(1)
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

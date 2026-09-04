@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # MOD_NAME="ReCoreUI Settings integration"
 # MOD_AUTHOR="ported from supplied Settings app mod"
-set -eo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="${PWD}"
@@ -52,55 +52,44 @@ if add:
 PY
 }
 
-# Merge supplied resources in one Python process.
-python3 - "$PAYLOAD/res" "$TARGET/res" <<'PY'
-from pathlib import Path
-import re, sys
-srcroot, dstroot = map(Path, sys.argv[1:])
-tags = r'(?:string|color|id|bool|integer|dimen|fraction|item|style|declare-styleable|attr|plurals|array)'
-name_re = re.compile(r'\bname="([^"]+)"')
-tag_re = re.compile(rf'(?ms)<({tags})\b[^>]*?(?:/>|>.*?</\1>)')
-for src in srcroot.rglob('*'):
-    if not src.is_file(): continue
-    rel=src.relative_to(srcroot); dst=dstroot/rel
-    if str(rel) == 'xml/sec_top_level_settings.xml': continue
-    if rel.parts and rel.parts[0].startswith('values') and src.suffix=='.xml':
-        dst.parent.mkdir(parents=True,exist_ok=True)
-        if not dst.exists(): dst.write_text(src.read_text(encoding='utf-8'),encoding='utf-8'); continue
-        st=src.read_text(encoding='utf-8'); dt=dst.read_text(encoding='utf-8')
-        m=re.search(r'<resources(?:\s[^>]*)?>(.*?)</resources>',st,re.S)
-        if not m: raise SystemExit(f'Invalid values XML: {src}')
-        existing=set(name_re.findall(dt)); add=[]
-        for x in tag_re.finditer(m.group(1)):
-            item=x.group(0).strip(); n=name_re.search(item)
-            if n and n.group(1) in existing: continue
-            add.append(item)
-        if add:
-            pos=dt.rfind('</resources>')
-            if pos<0: raise SystemExit(f'Missing </resources>: {dst}')
-            dst.write_text(dt[:pos]+'\n'+'\n'.join(add)+'\n'+dt[pos:],encoding='utf-8')
-    else:
-        dst.parent.mkdir(parents=True,exist_ok=True)
-        if not dst.exists() or dst.read_bytes()!=src.read_bytes(): dst.write_bytes(src.read_bytes())
-PY
-
-# sec_top_level_settings.xml is a patch directive, not a real XML resource file.
-python3 - "$PAYLOAD/res/xml/sec_top_level_settings.xml" "$TARGET/res/xml/sec_top_level_settings.xml" <<'PY'
+# Merge the supplied normal resources safely.
+while IFS= read -r -d '' src; do
+    rel="${src#"$PAYLOAD/"}"
+    dst="$TARGET/$rel"
+    if [[ "$rel" == res/values*/\*.xml ]]; then :; fi
+    if [[ "$rel" == res/values*/*.xml ]]; then
+        merge_values_xml "$src" "$dst"
+    elif [[ "$rel" == res/xml/sec_top_level_settings.xml ]]; then
+        # First line in the source archive is a sed insertion directive. Apply it without replacing stock XML.
+        python3 - "$src" "$dst" <<'PY'
 from pathlib import Path
 import sys
 src,dst=map(Path,sys.argv[1:])
-lines=src.read_text(encoding='utf-8').splitlines()
-if not lines: raise SystemExit('Empty sec_top_level_settings payload')
+lines=src.read_text().splitlines()
+if not lines: raise SystemExit('Empty sec_top_level_settings.xml payload')
+needle=lines[0].strip()
 insert='\n'.join(lines[1:]).strip()
-if not insert: raise SystemExit('Empty top-level preference payload')
-text=dst.read_text(encoding='utf-8') if dst.exists() else ''
+text=dst.read_text() if dst.exists() else ''
+if not insert: raise SystemExit('No top-level preference payload')
 key='android:key="top_level_unica"'
-if key not in text:
-    pos=text.find('</PreferenceScreen>')
-    if pos < 0: raise SystemExit('Missing </PreferenceScreen> in sec_top_level_settings.xml')
-    text=text[:pos]+insert+'\n'+text[pos:]
-    dst.write_text(text,encoding='utf-8')
+if key in text: raise SystemExit(0)
+marker=needle.strip('/a').strip() if needle.startswith('/') else needle
+idx=text.find('</PreferenceScreen>')
+if marker and marker in text:
+    line_end=text.find('\n', text.find(marker))
+    if line_end<0: line_end=len(text)
+    text=text[:line_end+1]+insert+'\n'+text[line_end+1:]
+elif idx>=0:
+    text=text[:idx]+insert+'\n'+text[idx:]
+else:
+    raise SystemExit(f'No suitable insertion point in {dst}')
+dst.write_text(text)
 PY
+    elif [[ "$rel" == res/xml/*.xml || "$rel" == res/layout/*.xml || "$rel" == res/drawable/*.xml || "$rel" == res/drawable-nodpi/* ]]; then
+        # Unique payload resources are safe to add/replace with the same supplied source.
+        copy_file "$src" "$dst"
+    fi
+done < <(find "$PAYLOAD/res" -type f -print0)
 
 # Android manifest: add each new Activity once, just before </application>.
 python3 - "$PAYLOAD/manifest_activities.xml" "$TARGET/AndroidManifest.xml" <<'PY'
@@ -143,16 +132,19 @@ python3 - "$ONEUI" <<'PY'
 from pathlib import Path
 import re,sys
 p=Path(sys.argv[1]); s=p.read_text()
-pat=r'(?ms)^\.method[^\n]*\bisDeviceWithMicroVersion\(\)Z\s*$.*?^\.end method\s*$'
-m=re.search(pat,s)
+pat=r'(\.method[^\n]*\bisDeviceWithMicroVersion\(\)Z\n)(.*?)(?=^\.end method\s*$)'
+m=re.search(pat,s,re.M|re.S)
 if not m: raise SystemExit('isDeviceWithMicroVersion()Z not found')
-new='.method public isDeviceWithMicroVersion()Z\n    .locals 1\n\n    const/4 p0, 0x1\n\n    return p0\n.end method'
+body=m.group(0)
+if 'const/4 p0, 0x1\n\n    return p0' in body: raise SystemExit(0)
+# preserve signature and return a deterministic true value.
+new=m.group(1)+'    .locals 1\n\n    const/4 p0, 0x1\n\n    return p0\n.end method'
 s=s[:m.start()]+new+s[m.end():]
 p.write_text(s)
 PY
 
 MODEL="$TARGET/smali_classes4/com/samsung/android/settings/deviceinfo/aboutphone/ModelNameGetter.smali"
-if grep -Fq 'const-string/jumbo v2, "ro.boot.em.model"' "$MODEL" || grep -Fq 'const-string p0, "ro.boot.em.model"' "$MODEL"; then :; else patch_replace_once "$MODEL" 'const-string p0, "ro.product.model"' 'const-string p0, "ro.boot.em.model"'; fi
+patch_replace_once "$MODEL" 'const-string p0, "ro.product.model"' 'const-string p0, "ro.boot.em.model"'
 
 SEARCHM="$TARGET/smali/com/android/settingslib/search/SearchIndexableResourcesMobile.smali"
 patch_replace_once "$SEARCHM" '.class public final Lcom/android/settingslib/search/SearchIndexableResourcesMobile;' '.class public Lcom/android/settingslib/search/SearchIndexableResourcesMobile;'
@@ -162,4 +154,3 @@ patch_replace_once "$LAMBDA" 'new-instance p0, Lcom/android/settingslib/search/S
 patch_replace_once "$LAMBDA" 'invoke-direct {p0}, Lcom/android/settingslib/search/SearchIndexableResourcesBase;-><init>()V' 'invoke-direct {p0}, Lio/mesalabs/unica/search/UnicaSearchIndexableResources;-><init>()V'
 
 log "ReCoreUI Settings payload merged and SecSettings hooks applied"
-return 0

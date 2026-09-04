@@ -1,0 +1,131 @@
+# Converted from the supplied UN1CA unified patch.
+# Source: 0001-Allow-disabling-secure-windows.patch
+
+FILE smali_classes2/com/android/server/wm/WindowManagerService$SettingsObserver.smali
+PATCH
+
+    move-result-object v6
+
+-     const-string/jumbo v7, "disable_secure_windows"
++     const-string/jumbo v7, "unica_secure_ss"
+
+-     invoke-static {v7}, Landroid/provider/Settings$Secure;->getUriFor(Ljava/lang/String;)Landroid/net/Uri;
++     invoke-static {v7}, Landroid/provider/Settings$System;->getUriFor(Ljava/lang/String;)Landroid/net/Uri;
+
+    move-result-object v7
+
+END
+END
+
+FILE smali_classes2/com/android/server/wm/WindowManagerService$SettingsObserver.smali
+PATCH
+.method public final updateDisableSecureWindows()V
+    .locals 3
+
+-     const-string/jumbo v0, "ro.debuggable"
+- 
+-     const/4 v1, 0x0
+- 
+-     invoke-static {v0, v1}, Landroid/os/SystemProperties;->getBoolean(Ljava/lang/String;Z)Z
+- 
+-     move-result v0
+- 
+-     if-nez v0, :cond_0
+- 
+-     goto :goto_0
+- 
+-     :cond_0
+-     :try_start_0
+    iget-object v0, p0, Lcom/android/server/wm/WindowManagerService$SettingsObserver;->this$0:Lcom/android/server/wm/WindowManagerService;
+
+    iget-object v0, v0, Lcom/android/server/wm/WindowManagerService;->mContext:Landroid/content/Context;
+END
+END
+
+FILE smali_classes2/com/android/server/wm/WindowManagerService$SettingsObserver.smali
+PATCH
+
+    move-result-object v0
+
+-     const-string/jumbo v2, "disable_secure_windows"
++     const/4 v1, 0x0
+
+-     invoke-static {v0, v2, v1}, Landroid/provider/Settings$Secure;->getIntForUser(Landroid/content/ContentResolver;Ljava/lang/String;I)I
++     const-string/jumbo v2, "unica_secure_ss"
++ 
++     invoke-static {v0, v2, v1}, Landroid/provider/Settings$System;->getInt(Landroid/content/ContentResolver;Ljava/lang/String;I)I
+
+    move-result v0
+-     :try_end_0
+-     .catch Landroid/provider/Settings$SettingNotFoundException; {:try_start_0 .. :try_end_0} :catch_0
+
+-     if-eqz v0, :cond_1
++     if-eqz v0, :cond_0
+
+    const/4 v1, 0x1
+
+-     :catch_0
+-     :cond_1
++     :cond_0
+    iget-object v0, p0, Lcom/android/server/wm/WindowManagerService$SettingsObserver;->this$0:Lcom/android/server/wm/WindowManagerService;
+
+    iget-boolean v0, v0, Lcom/android/server/wm/WindowManagerService;->mDisableSecureWindows:Z
+
+-     if-ne v0, v1, :cond_2
++     if-ne v0, v1, :cond_1
+
+    goto :goto_0
+
+-     :cond_2
++     :cond_1
+    iget-object v0, p0, Lcom/android/server/wm/WindowManagerService$SettingsObserver;->this$0:Lcom/android/server/wm/WindowManagerService;
+
+    iget-object v0, v0, Lcom/android/server/wm/WindowManagerService;->mGlobalLock:Lcom/android/server/wm/WindowManagerGlobalLock;
+END
+END
+
+FILE smali_classes2/com/android/server/wm/WindowManagerService$SettingsObserver.smali
+PATCH
+
+    monitor-enter v0
+
+-     :try_start_1
++     :try_start_0
+    iget-object v2, p0, Lcom/android/server/wm/WindowManagerService$SettingsObserver;->this$0:Lcom/android/server/wm/WindowManagerService;
+
+    iput-boolean v1, v2, Lcom/android/server/wm/WindowManagerService;->mDisableSecureWindows:Z
+END
+END
+
+FILE smali_classes2/com/android/server/wm/WindowManagerService$SettingsObserver.smali
+PATCH
+    invoke-virtual {p0}, Lcom/android/server/wm/RootWindowContainer;->refreshSecureSurfaceState()V
+
+    monitor-exit v0
+-     :try_end_1
+-     .catchall {:try_start_1 .. :try_end_1} :catchall_0
++     :try_end_0
++     .catchall {:try_start_0 .. :try_end_0} :catchall_0
+
+    invoke-static {}, Lcom/android/server/wm/WindowManagerService;->resetPriorityAfterLockedSection()V
+
+END
+END
+
+FILE smali_classes2/com/android/server/wm/WindowManagerService$SettingsObserver.smali
+PATCH
+    :catchall_0
+    move-exception p0
+
+-     :try_start_2
++     :try_start_1
+    monitor-exit v0
+-     :try_end_2
+-     .catchall {:try_start_2 .. :try_end_2} :catchall_0
++     :try_end_1
++     .catchall {:try_start_1 .. :try_end_1} :catchall_0
+
+    invoke-static {}, Lcom/android/server/wm/WindowManagerService;->resetPriorityAfterLockedSection()V
+
+END
+END

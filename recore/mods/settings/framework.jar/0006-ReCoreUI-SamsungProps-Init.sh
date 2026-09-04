@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -eo pipefail
+set -euo pipefail
 for f in smali/android/app/Instrumentation.smali; do
   [[ -f "$f" ]] || { echo "[ReCoreUI] skip: $f absent"; exit 0; }
   python3 - "$f" <<'PY'

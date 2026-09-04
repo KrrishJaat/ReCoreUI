@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -eo pipefail
+set -euo pipefail
 f='smali_classes2/com/samsung/android/settings/intelligence/search/categorizing/TopLevelKeysCollector.smali'
 [[ -f "$f" ]] || { echo '[ReCoreUI] TopLevelKeysCollector absent; skipping optional search registration'; exit 0; }
 python3 - "$f" <<'PY'

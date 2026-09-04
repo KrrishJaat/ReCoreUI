@@ -1,0 +1,70 @@
+# Converted from the supplied UN1CA unified patch.
+# Source: 0005-Allow-disable-ASKS.patch
+
+FILE smali/com/android/server/asks/ASKSManagerService.smali
+PATCH
+    move-object v6, v5
+
+    :goto_0
+-     const-string/jumbo v7, "ro.build.official.release"
++     const-string/jumbo v7, "persist.sys.unica.asks"
+
+-     const-string/jumbo v8, "false"
++     const-string/jumbo v8, "true"
+
+    invoke-static {v7, v8}, Landroid/os/SystemProperties;->get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+
+    move-result-object v7
+
+-     const-string/jumbo v8, "true"
+- 
+    invoke-virtual {v8, v7}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+
+    move-result v7
+END
+END
+
+FILE smali/com/android/server/asks/ASKSManagerService.smali
+PATCH
+    invoke-static {v3, v0}, Landroid/util/Slog;->d(Ljava/lang/String;Ljava/lang/String;)I
+
+    :cond_6
+-     const-string/jumbo v0, "ro.build.official.release"
++     const-string/jumbo v0, "persist.sys.unica.asks"
+
+-     const-string/jumbo v2, "false"
++     const-string/jumbo v2, "true"
+
+    invoke-static {v0, v2}, Landroid/os/SystemProperties;->get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+
+    move-result-object v0
+
+-     const-string/jumbo v2, "true"
+- 
+    invoke-virtual {v2, v0}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+
+    move-result v0
+END
+END
+
+FILE smali/com/android/server/asks/ASKSManagerService.smali
+PATCH
+
+    invoke-virtual {v1, v14}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+
+-     const-string/jumbo v1, "ro.build.official.release"
++     const-string/jumbo v1, "persist.sys.unica.asks"
+
+-     invoke-static {v1}, Landroid/os/SystemProperties;->get(Ljava/lang/String;)Ljava/lang/String;
++     const-string/jumbo v14, "true"
+
+-     move-result-object v1
++     invoke-static {v1, v14}, Landroid/os/SystemProperties;->get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+
+-     const-string/jumbo v14, "true"
++     move-result-object v1
+
+    invoke-virtual {v14, v1}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+
+END
+END

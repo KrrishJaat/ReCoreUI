@@ -1,0 +1,264 @@
+# Converted from the supplied UN1CA unified patch.
+# Source: 0004-Allow-disable-screen-capture-detection.patch
+
+FILE smali_classes2/com/android/server/wm/ScreenRecordingCallbackController.smali
+PATCH
+.method public final dispatchCallbacks(Landroid/util/ArraySet;Z)V
+    .locals 5
+
+-     invoke-virtual {p1}, Landroid/util/ArraySet;->isEmpty()Z
++     iget-object v0, p0, Lcom/android/server/wm/ScreenRecordingCallbackController;->mWms:Lcom/android/server/wm/WindowManagerService;
++ 
++     iget-object v0, v0, Lcom/android/server/wm/WindowManagerService;->mContext:Landroid/content/Context;
++ 
++     invoke-virtual {v0}, Landroid/content/Context;->getContentResolver()Landroid/content/ContentResolver;
++ 
++     move-result-object v0
++ 
++     const-string v1, "unica_ss_detection"
++ 
++     const/4 v2, 0x0
++ 
++     invoke-static {v0, v1, v2}, Landroid/provider/Settings$System;->getInt(Landroid/content/ContentResolver;Ljava/lang/String;I)I
+
+    move-result v0
+
+    if-eqz v0, :cond_0
+
+-     return-void
++     const/4 p2, 0x0
+
+    :cond_0
++     invoke-virtual {p1}, Landroid/util/ArraySet;->isEmpty()Z
++ 
++     move-result v0
++ 
++     if-eqz v0, :cond_1
++ 
++     return-void
++ 
++     :cond_1
+    const/4 v0, 0x0
+
+    move v1, v0
+END
+END
+
+FILE smali_classes2/com/android/server/wm/ScreenRecordingCallbackController.smali
+PATCH
+
+    move-result v2
+
+-     if-ge v1, v2, :cond_1
++     if-ge v1, v2, :cond_2
+
+    iget-object v2, p0, Lcom/android/server/wm/ScreenRecordingCallbackController;->mLastInvokedStateByUid:Landroid/util/ArrayMap;
+
+END
+END
+
+FILE smali_classes2/com/android/server/wm/ScreenRecordingCallbackController.smali
+PATCH
+
+    goto :goto_0
+
+-     :cond_1
++     :cond_2
+    new-instance v1, Ljava/util/ArrayList;
+
+    invoke-direct {v1}, Ljava/util/ArrayList;-><init>()V
+END
+END
+
+FILE smali_classes2/com/android/server/wm/ScreenRecordingCallbackController.smali
+PATCH
+
+    move-result v2
+
+-     if-ge v0, v2, :cond_3
++     if-ge v0, v2, :cond_4
+
+    iget-object v2, p0, Lcom/android/server/wm/ScreenRecordingCallbackController;->mCallbacks:Landroid/util/ArrayMap;
+
+END
+END
+
+FILE smali_classes2/com/android/server/wm/ScreenRecordingCallbackController.smali
+PATCH
+
+    move-result v2
+
+-     if-eqz v2, :cond_2
++     if-eqz v2, :cond_3
+
+    iget-object v2, p0, Lcom/android/server/wm/ScreenRecordingCallbackController;->mCallbacks:Landroid/util/ArrayMap;
+
+END
+END
+
+FILE smali_classes2/com/android/server/wm/ScreenRecordingCallbackController.smali
+PATCH
+
+    invoke-virtual {v1, v2}, Ljava/util/ArrayList;->add(Ljava/lang/Object;)Z
+
+-     :cond_2
++     :cond_3
+    add-int/lit8 v0, v0, 0x1
+
+    goto :goto_1
+
+-     :cond_3
++     :cond_4
+    iget-object p0, p0, Lcom/android/server/wm/ScreenRecordingCallbackController;->mWms:Lcom/android/server/wm/WindowManagerService;
+
+    iget-object p0, p0, Lcom/android/server/wm/WindowManagerService;->mH:Lcom/android/server/wm/WindowManagerService$H;
+END
+END
+
+FILE smali_classes2/com/android/server/wm/WindowManagerService.smali
+PATCH
+
+    move-result v0
+
+-     if-eqz v0, :cond_1
++     if-eqz v0, :cond_2
++ 
++     iget-object v0, p0, Lcom/android/server/wm/WindowManagerService;->mContext:Landroid/content/Context;
+
++     invoke-virtual {v0}, Landroid/content/Context;->getContentResolver()Landroid/content/ContentResolver;
++ 
++     move-result-object v0
++ 
++     const-string v1, "unica_ss_detection"
++ 
++     const/4 v3, 0x0
++ 
++     invoke-static {v0, v1, v3}, Landroid/provider/Settings$System;->getInt(Landroid/content/ContentResolver;Ljava/lang/String;I)I
++ 
++     move-result v0
++ 
++     if-eqz v0, :cond_0
++ 
++     invoke-static {}, Ljava/util/Collections;->emptyList()Ljava/util/List;
++ 
++     move-result-object p0
++ 
++     return-object p0
++ 
++     :cond_0
+    iget-object v0, p0, Lcom/android/server/wm/WindowManagerService;->mGlobalLock:Lcom/android/server/wm/WindowManagerGlobalLock;
+
+    invoke-static {}, Lcom/android/server/wm/WindowManagerService;->boostPriorityForLockedSection()V
+END
+END
+
+FILE smali_classes2/com/android/server/wm/WindowManagerService.smali
+PATCH
+
+    move-result-object p0
+
+-     if-nez p0, :cond_0
++     if-nez p0, :cond_1
+
+    new-instance p0, Ljava/util/ArrayList;
+
+END
+END
+
+FILE smali_classes2/com/android/server/wm/WindowManagerService.smali
+PATCH
+
+    goto :goto_0
+
+-     :cond_0
++     :cond_1
+    :try_start_1
+    new-instance p1, Landroid/util/ArraySet;
+
+END
+END
+
+FILE smali_classes2/com/android/server/wm/WindowManagerService.smali
+PATCH
+
+    throw p0
+
+-     :cond_1
++     :cond_2
+    new-instance p0, Ljava/lang/SecurityException;
+
+    const-string/jumbo p1, "Requires STATUS_BAR_SERVICE permission"
+END
+END
+
+FILE smali_classes2/com/android/server/wm/WindowManagerService.smali
+PATCH
+
+    invoke-virtual {p0}, Landroid/view/IWindowManager$Stub;->registerScreenRecordingCallback_enforcePermission()V
+
++     iget-object v2, p0, Lcom/android/server/wm/WindowManagerService;->mContext:Landroid/content/Context;
++ 
++     invoke-virtual {v2}, Landroid/content/Context;->getContentResolver()Landroid/content/ContentResolver;
++ 
++     move-result-object v2
++ 
++     const-string v3, "unica_ss_detection"
++ 
++     invoke-static {v2, v3, v1}, Landroid/provider/Settings$System;->getInt(Landroid/content/ContentResolver;Ljava/lang/String;I)I
++ 
++     move-result v2
++ 
++     if-eqz v2, :cond_0
++ 
++     return v1
++ 
++     :cond_0
+    iget-object p0, p0, Lcom/android/server/wm/WindowManagerService;->mScreenRecordingCallbackController:Lcom/android/server/wm/ScreenRecordingCallbackController;
+
+    iget-object v2, p0, Lcom/android/server/wm/ScreenRecordingCallbackController;->mWms:Lcom/android/server/wm/WindowManagerService;
+END
+END
+
+FILE smali_classes2/com/android/server/wm/WindowManagerService.smali
+PATCH
+
+    move-result v5
+
+-     if-eqz v5, :cond_0
++     if-eqz v5, :cond_1
+
+    iget-object p0, p0, Lcom/android/server/wm/ScreenRecordingCallbackController;->mLastInvokedStateByUid:Landroid/util/ArrayMap;
+
+END
+END
+
+FILE smali_classes2/com/android/server/wm/WindowManagerService.smali
+PATCH
+
+    goto :goto_1
+
+-     :cond_0
++     :cond_1
+    :try_start_1
+    new-instance v5, Lcom/android/server/wm/ScreenRecordingCallbackController$Callback;
+
+END
+END
+
+FILE smali_classes2/com/android/server/wm/WindowManagerService.smali
+PATCH
+    :try_start_3
+    iget-object p1, p0, Lcom/android/server/wm/ScreenRecordingCallbackController;->mRecordedWC:Lcom/android/server/wm/WindowContainer;
+
+-     if-nez p1, :cond_1
++     if-nez p1, :cond_2
+
+    goto :goto_0
+
+-     :cond_1
++     :cond_2
+    new-array v6, v0, [Z
+
+    aput-boolean v1, v6, v1
+END
+END

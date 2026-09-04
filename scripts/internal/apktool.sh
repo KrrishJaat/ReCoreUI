@@ -38,9 +38,9 @@ DEX_HEX_BYTES()
 
 PATCH_MARKER_FILE="$WORKSPACE/.patch_markers"
 
-DO_SIGN_APK="false"  # coz disabled apk signature verification on framework.jar as of now
-CERT_PEM=""
-CERT_PK8=""
+DO_SIGN_APK="true"
+CERT_PEM="$PREBUILTS/signapk/keys/aosp_testkey.x509.pem"
+CERT_PK8="$PREBUILTS/signapk/keys/aosp_testkey.pk8"
 
 DECOMPILE_RES=true
 
