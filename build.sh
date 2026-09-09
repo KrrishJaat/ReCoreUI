@@ -232,6 +232,7 @@ _BUILD_ROM()
             find "$LAYER" -type f -name "*.sh" \
                 ! -path "*.apk/*" \
                 ! -path "*.jar/*" \
+                ! -path "*/un1ca_mods/*" \
                 -print0 | sort -z | while IFS= read -r -d '' FILE; do
 
                 DIR="$(dirname "$FILE")"
@@ -285,6 +286,17 @@ _BUILD_ROM()
             fi
         done < <(find "$LAYER" -type d -name "*.img" -print0)
     done
+
+    # UN1CA module support: each layer may carry a un1ca_mods/ subfolder of
+    # stock UN1CA Magisk-style modules (module.prop + customize.sh, dropped
+    # in as-is, no conversion). Runs after the layer loop so DECODE_APK can
+    # find real firmware files already in the workspace, and before
+    # _APKTOOL_PATCH so its worktree rebuild picks up whatever got decoded.
+    if declare -f PROCESS_RECOREUI_MODULES >/dev/null 2>&1; then
+        for LAYER in "${LAYERS[@]}"; do
+            PROCESS_RECOREUI_MODULES "$LAYER/un1ca_mods" || ERROR_EXIT "UN1CA module processing failed ($LAYER/un1ca_mods)"
+        done
+    fi
 
     _APKTOOL_PATCH || ERROR_EXIT "APK/JAR patching failed"
     REPACK_ROM "$FILESYSTEM" || ERROR_EXIT "Repack failed"

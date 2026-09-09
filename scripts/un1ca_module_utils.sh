@@ -7,15 +7,29 @@ _UN1CA_PREBUILTS="${PREBUILTS:-${RECOREUI:-$(cd "$_UN1CA_SELF_DIR/.." && pwd)}/p
 _UN1CA_PATCHER="$_UN1CA_PREBUILTS/smalipatch/un1ca_patch.py"
 _UN1CA_SMALI_COMPAT="$_UN1CA_SELF_DIR/un1ca_smali_compat.py"
 
-# Capture native ReCoreUI GET_PROP once, before the UN1CA one-argument wrapper
-# is installed. This avoids recursive self-wrapping on repeated module calls.
+# Capture native ReCoreUI GET_PROP exactly once, before the UN1CA wrapper
+# below is installed under the same name. This is what avoids the recursive
+# self-wrapping bug: the capture never repeats inside a per-module code path,
+# it always renames the ORIGINAL native definition, once, at source time.
 if declare -f GET_PROP >/dev/null 2>&1 && ! declare -f _RECORE_NATIVE_GET_PROP >/dev/null 2>&1; then
     eval "$(declare -f GET_PROP | sed '1s/^GET_PROP /_RECORE_NATIVE_GET_PROP /')"
 fi
 
+# Exactly the 8 partitions UN1CA's own common_utils.sh:IS_VALID_PARTITION_NAME
+# accepts (itself sourced from AOSP's property_service.cpp). Do not add more:
+# an accepted-but-wrong partition name silently resolves to a bogus path
+# instead of failing loudly, which is worse than rejecting it.
 _UN1CA_VALID_PARTITION() {
-    case "$1" in system|system_ext|product|vendor|odm|vendor_dlkm|odm_dlkm|system_dlkm|optics|prism) return 0;; *) return 1;; esac
+    case "$1" in
+        system|system_ext|product|vendor|odm|vendor_dlkm|odm_dlkm|system_dlkm) return 0;;
+        *) return 1;;
+    esac
 }
+
+# Same order UN1CA's own bare/single-arg GET_PROP searches in (AOSP
+# property_service.cpp load order): system, system_ext, system_dlkm, vendor,
+# vendor_dlkm, odm_dlkm, odm, product.
+_UN1CA_PROP_SEARCH_ORDER=(system system_ext system_dlkm vendor vendor_dlkm odm_dlkm odm product)
 
 _UN1CA_LOG() {
     if declare -f LOG >/dev/null 2>&1; then LOG "$*"; else printf '%s\n' "$*"; fi
@@ -25,6 +39,24 @@ _UN1CA_PARTITION_PATH() {
     local p="$1"
     if declare -f GET_PARTITION_PATH >/dev/null 2>&1; then GET_PARTITION_PATH "$p"; return $?; fi
     case "$p" in system) printf '%s/system/system\n' "$WORKSPACE";; *) printf '%s/%s\n' "$WORKSPACE" "$p";; esac
+}
+
+# Single source of truth for "where does <partition> <file> really live in
+# the workspace". UN1CA's own DECODE_APK/SMALI_PATCH strip a literal leading
+# "system/" from FILE only when partition is "system" (every other
+# partition's FILE is already partition-root-relative) - replicated exactly -
+# then all partition placement, including system's "system/system" doubling,
+# is delegated to _UN1CA_PARTITION_PATH (-> native GET_PARTITION_PATH) rather
+# than hardcoded here a second time. Two independent hardcoded copies of this
+# is what let DECODE_APK and the virtual-target resolver drift apart for any
+# partition other than system.
+_UN1CA_REAL_PATH() {
+    local part="$1" file="$2" rel base
+    while [[ "$file" == /* ]]; do file="${file#/}"; done
+    rel="$file"
+    [[ "$part" == system ]] && rel="${file#system/}"
+    base="$(_UN1CA_PARTITION_PATH "$part")" || return 1
+    printf '%s/%s\n' "$base" "$rel"
 }
 
 _READ_MODULE_PROP() {
@@ -45,7 +77,11 @@ _UN1CA_MERGE_CONFIG() {
     for src in "$mod"/file_context-* "$mod"/fs_config-*; do
         [[ -f "$src" ]] || continue
         name=$(basename "$src")
-        case "$name" in file_context-*) target="${name/file_context-/}_file_contexts";; fs_config-*) target="${name/fs_config-/}_fs_config";; esac
+        target=""
+        case "$name" in
+            file_context-*) target="${name/file_context-/}_file_contexts";;
+            fs_config-*) target="${name/fs_config-/}_fs_config";;
+        esac
         [[ -n "$target" ]] || continue
         if [[ ! -f "$cfgdir/$target" ]]; then cp -a "$src" "$cfgdir/$target"; continue; fi
         while IFS= read -r line || [[ -n "$line" ]]; do
@@ -58,11 +94,13 @@ _UN1CA_MERGE_CONFIG() {
 }
 
 _APPLY_MODULE_PAYLOAD() {
-    local mod="$1" p src dst
+    local mod="$1" p src dst links
     for p in system system_ext product vendor odm vendor_dlkm odm_dlkm system_dlkm; do
         src="$mod/$p"; [[ -d "$src" ]] || continue
         dst="$(_UN1CA_PARTITION_PATH "$p")" || return 1
         [[ -d "$dst" ]] || mkdir -p "$dst"
+        links="$(find "$src" -type l 2>/dev/null)"
+        [[ -z "$links" ]] || _UN1CA_LOG "UN1CA: warning: module ships symlink(s) under $p/, skipping (not copied): $links"
         rsync -a --no-links "$src/" "$dst/" || return 1
     done
 }
@@ -84,13 +122,11 @@ _READ_AND_APPLY_MODULE_PROPS() {
 }
 
 _UN1CA_VIRTUAL_TARGET() {
-    local part="$1" file="$2" root="$WORKSPACE/.un1ca_apktool" real link rel
+    local part="$1" file="$2" root="$WORKSPACE/.un1ca_apktool" real link
+    real="$(_UN1CA_REAL_PATH "$part" "$file")" || return 1
+    real="$(dirname "$real")/$(basename "$real")_decompiled"
     while [[ "$file" == /* ]]; do file="${file#/}"; done
     [[ "$part" == system ]] && file="${file#system/}"
-    real="${WORKSPACE}/${part}/${file}"
-    # Virtual UN1CA target points at ReCoreUI's decoded worktree, not the APK/JAR file.
-    if [[ "$part" == system ]]; then real="${WORKSPACE}/system/system/${file}"; fi
-    real="$(dirname "$real")/$(basename "$real")_decompiled"
     link="$root/$part/$file"
     [[ -d "$real" ]] || return 1
     mkdir -p "$(dirname "$link")"
@@ -100,15 +136,17 @@ _UN1CA_VIRTUAL_TARGET() {
 }
 
 DECODE_APK() {
-    local part="$1" file="$2" target rel worktree
-    while [[ "$file" == /* ]]; do file="${file#/}"; done
-    target="$file"; [[ "$part" == system ]] && target="${file#system/}"
-    if [[ "$part" == system ]]; then rel="system/system/$target"; else rel="$part/$target"; fi
-    # FIND_TARGET accepts the same relative workspace path used by apktool.sh.
-    local target_file=""
-    if declare -f FIND_TARGET >/dev/null 2>&1; then target_file="$(FIND_TARGET "$(basename "$target")" 2>/dev/null || true)"; fi
-    if [[ -z "$target_file" ]]; then target_file="$WORKSPACE/$rel"; fi
-    worktree="$(dirname "$target_file")/$(basename "$target")_decompiled"
+    local part="$1" file="$2" target_file worktree
+    _UN1CA_VALID_PARTITION "$part" || return 1
+    target_file=""
+    if declare -f FIND_TARGET >/dev/null 2>&1; then
+        target_file="$(FIND_TARGET "$(basename "$file")" 2>/dev/null || true)"
+    fi
+    if [[ -z "$target_file" || ! -f "$target_file" ]]; then
+        target_file="$(_UN1CA_REAL_PATH "$part" "$file")" || return 1
+    fi
+    [[ -f "$target_file" ]] || { printf 'UN1CA: target not found: %s\n' "$target_file" >&2; return 1; }
+    worktree="$(dirname "$target_file")/$(basename "$target_file")_decompiled"
     if [[ ! -d "$worktree" ]]; then
         DECOMPILE "${target_file#$WORKSPACE/}" || return 1
     fi
@@ -119,10 +157,15 @@ DECODE_APK() {
 
 GET_PROP() {
     if [[ $# -eq 1 ]]; then
-        if declare -f _RECORE_NATIVE_GET_PROP >/dev/null 2>&1; then _RECORE_NATIVE_GET_PROP system "$1"; else return 1; fi
-    else
-        _RECORE_NATIVE_GET_PROP "$@"
+        declare -f _RECORE_NATIVE_GET_PROP >/dev/null 2>&1 || return 1
+        local part val
+        for part in "${_UN1CA_PROP_SEARCH_ORDER[@]}"; do
+            val="$(_RECORE_NATIVE_GET_PROP "$part" "$1" 2>/dev/null)"
+            [[ -n "$val" ]] && { printf '%s\n' "$val"; return 0; }
+        done
+        return 1
     fi
+    _RECORE_NATIVE_GET_PROP "$@"
 }
 
 SET_PROP() {
@@ -132,37 +175,29 @@ SET_PROP() {
     return 1
 }
 
+# Prefers ReCoreUI's own native, xmlstarlet-backed FF/GET_FF_VAL when a
+# WORKSPACE-relative call is made (the common case from customize.sh) - more
+# robust than text-scanning for anything beyond a single-line <tag>value</tag>.
+# The explicit-file form (2 args) still uses the plain-text approach, since
+# that form exists specifically to point at a file outside the live tree.
 GET_FLOATING_FEATURE_CONFIG() {
-    local file config
-    if [[ $# -eq 1 ]]; then file="$WORKSPACE/system/system/etc/floating_feature.xml"; config="$1"; else file="$1"; config="$2"; fi
+    local file="" config=""
+    if [[ $# -eq 1 ]]; then config="$1"; else file="$1"; config="$2"; fi
+    if [[ -z "$file" ]] && declare -f GET_FF_VAL >/dev/null 2>&1; then
+        GET_FF_VAL "$config"; return $?
+    fi
+    file="${file:-$WORKSPACE/system/system/etc/floating_feature.xml}"
     [[ -f "$file" ]] || return 1
     grep -o -P "(?<=<${config}>)[^<]+" "$file" 2>/dev/null || true
 }
 
-SMALI_PATCH() {
-    local part="$1" file="$2" smali="$3" op="$4"
-    [[ -n "$part" && -n "$file" && -n "$smali" && -n "$op" ]] || return 1
-    _UN1CA_VALID_PARTITION "$part" || return 1
-    DECODE_APK "$part" "$file" || return 1
-    local relfile="$file"
-    [[ "$part" == system ]] && relfile="${file#system/}"
-    local fp="$APKTOOL_DIR/$part/$relfile/$smali"
-    [[ -f "$fp" ]] || { printf 'UN1CA: smali not found: %s\n' "$fp" >&2; return 1; }
-    case "$op" in
-        remove)
-            local cls="${smali%.smali}" used
-            used=$(find "$(dirname "$fp")" -type f ! -path "$fp" -exec grep -l -- "${cls##*/};" {} + 2>/dev/null || true)
-            [[ -z "$used" ]] || { printf 'UN1CA: refusing to remove used smali %s\n' "$smali" >&2; return 1; }
-            rm -f -- "$fp";;
-        replaceall) python3 "$_UN1CA_SMALI_COMPAT" replaceall "$fp" __ALL__ "$5" "$6";;
-        replace) python3 "$_UN1CA_SMALI_COMPAT" replace "$fp" "$5" "$6" "$7";;
-        return|null|strip) python3 "$_UN1CA_SMALI_COMPAT" "$op" "$fp" "$5" "${6:-}";;
-        *) printf 'UN1CA: invalid SMALI_PATCH operation: %s\n' "$op" >&2; return 1;;
-    esac
-}
-
 SET_FLOATING_FEATURE_CONFIG() {
-    local config="$1" value="$2" file="${3:-$WORKSPACE/system/system/etc/floating_feature.xml}"
+    local config="$1" value="$2" file="${3:-}"
+    if [[ -z "$file" ]] && declare -f FF >/dev/null 2>&1; then
+        if [[ "$value" == "--delete" || "$value" == "-d" ]]; then FF "$config"; else FF "$config" "$value"; fi
+        return $?
+    fi
+    file="${file:-$WORKSPACE/system/system/etc/floating_feature.xml}"
     [[ -f "$file" ]] || return 1
     if grep -q "<${config}>" "$file"; then
         if [[ "$value" == "--delete" || "$value" == "-d" ]]; then sed -i "/<${config}>/d" "$file"; else sed -i "s|<${config}>[^<]*</${config}>|<${config}>${value}</${config}>|" "$file"; fi
@@ -173,9 +208,60 @@ SET_FLOATING_FEATURE_CONFIG() {
     fi
 }
 
-EVAL() { eval -- "$*"; }
+EVAL() {
+    local out rc
+    out="$(eval -- "$*" 2>&1)"; rc=$?
+    [[ $rc -eq 0 ]] || printf 'UN1CA: command failed: %s\n%s\n' "$*" "$out" >&2
+    return $rc
+}
+
 LOG_STEP_IN() { if declare -f LOG_BEGIN >/dev/null 2>&1; then LOG_BEGIN "$*"; else _UN1CA_LOG "$*"; fi; }
 LOG_STEP_OUT() { if declare -f LOG_END >/dev/null 2>&1; then LOG_END "$*"; fi; }
+
+# Refuses to touch a smali element (whole file, or one method) that's still
+# referenced anywhere ELSE in the decompiled tree. Checked against the WHOLE
+# tree root, not just the smali file's own folder - a class/method is almost
+# always referenced from a *different* package, so a same-folder-only check
+# (as originally written here) would essentially never catch a real usage.
+_UN1CA_UNUSED_ELSEWHERE() {
+    local tree_root="$1" fp="$2" needle="$3" hits
+    hits="$(grep -rl -F -- "$needle" "$tree_root" 2>/dev/null | grep -v -F -x -- "$fp")"
+    [[ -z "$hits" ]]
+}
+
+SMALI_PATCH() {
+    local part="$1" file="$2" smali="$3" op="${4:-}"
+    [[ -n "$part" && -n "$file" && -n "$smali" && -n "$op" ]] || return 1
+    _UN1CA_VALID_PARTITION "$part" || return 1
+    DECODE_APK "$part" "$file" || return 1
+    local relfile="$file"
+    while [[ "$relfile" == /* ]]; do relfile="${relfile#/}"; done
+    [[ "$part" == system ]] && relfile="${relfile#system/}"
+    local tree_root="$APKTOOL_DIR/$part/$relfile"
+    local fp="$tree_root/$smali"
+    [[ -f "$fp" ]] || { printf 'UN1CA: smali not found: %s\n' "$fp" >&2; return 1; }
+    local cls="${smali%.smali}"; cls="${cls##*/}"
+    case "$op" in
+        remove)
+            _UN1CA_UNUSED_ELSEWHERE "$tree_root" "$fp" "${cls};" || { printf 'UN1CA: refusing to remove used smali %s\n' "$smali" >&2; return 1; }
+            rm -f -- "$fp";;
+        strip)
+            local m5="${5:-}"
+            [[ -n "$m5" ]] || { printf 'UN1CA: strip requires a method\n' >&2; return 1; }
+            local mname="${m5%%(*}"
+            local hits owners
+            hits="$(grep -rl -F -- "${cls};" "$tree_root" 2>/dev/null | grep -v -F -x -- "$fp")"
+            if [[ -n "$hits" ]]; then
+                owners="$(printf '%s\n' "$hits" | xargs -r grep -l -F -- "$mname" 2>/dev/null)"
+                [[ -z "$owners" ]] || { printf 'UN1CA: refusing to strip used method %s\n' "$m5" >&2; return 1; }
+            fi
+            python3 "$_UN1CA_SMALI_COMPAT" strip "$fp" "$m5";;
+        replaceall) python3 "$_UN1CA_SMALI_COMPAT" replaceall "$fp" __ALL__ "${5:-}" "${6:-}";;
+        replace) python3 "$_UN1CA_SMALI_COMPAT" replace "$fp" "${5:-}" "${6:-}" "${7:-}";;
+        return|null) python3 "$_UN1CA_SMALI_COMPAT" "$op" "$fp" "${5:-}" "${6:-}";;
+        *) printf 'UN1CA: invalid SMALI_PATCH operation: %s\n' "$op" >&2; return 1;;
+    esac
+}
 
 _APPLY_MODULE_SMALI_PATCHES() {
     local mod="$1" f rel part target_rel target_name tf wd
@@ -190,7 +276,10 @@ _APPLY_MODULE_SMALI_PATCHES() {
         [[ "$target_name" == *.apk || "$target_name" == *.jar ]] || continue
         tf=""
         declare -f FIND_TARGET >/dev/null 2>&1 && tf="$(FIND_TARGET "$target_name" 2>/dev/null || true)"
-        [[ -n "$tf" ]] || continue
+        if [[ -z "$tf" || ! -f "$tf" ]]; then
+            tf="$(_UN1CA_REAL_PATH "$part" "$target_rel")" || return 1
+        fi
+        [[ -f "$tf" ]] || continue
         wd="$(dirname "$tf")/${target_name}_decompiled"
         [[ -d "$wd" ]] || { DECOMPILE "${tf#$WORKSPACE/}" || return 1; }
         if [[ "$f" == *.patch ]]; then
@@ -217,11 +306,11 @@ _APPLY_RECOREUI_MODULE() {
     local mod="$1"
     [[ -d "$mod" && -f "$mod/module.prop" ]] || return 1
     [[ -f "$mod/disable" ]] && return 0
-    # A module may be discovered more than once (or customize.sh may be
-    # sourced repeatedly during testing). Skip an exact repeat in this
-    # workspace, while allowing changed module contents to run again.
+    # A module may be discovered more than once (or the build re-run for an
+    # idempotency check). Skip an exact repeat in this workspace, while still
+    # allowing genuinely changed module contents to run again.
     local module_fingerprint marker_dir marker
-    module_fingerprint="$( { printf '%s\n' "$mod"; find "$mod" -type f -not -path '*/.un1ca_apktool/*' -print0 | sort -z | xargs -0 -r sha256sum; } | sha256sum | cut -d' ' -f1 )"
+    module_fingerprint="$( { printf '%s\n' "$mod"; find "$mod" -type f -print0 | sort -z | xargs -0 -r sha256sum; } | sha256sum | cut -d' ' -f1 )"
     marker_dir="$WORKSPACE/.un1ca_modules"
     marker="$marker_dir/$module_fingerprint"
     [[ -f "$marker" ]] && return 0

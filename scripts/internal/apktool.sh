@@ -23,24 +23,13 @@
 # https://github.com/SameerAlSahab/smali_patch/blob/main/smali_patch.py
 # https://github.com/iBotPeaches/Apktool/issues/1775
 
-DEFAULT_SDK="36"  # branch sixteen
-
-DEX_HEX_BYTES()
-{
-    local FILE="$1"
-
-    if command -v xxd >/dev/null 2>&1; then
-        xxd -s 4 -l 4 -p "$FILE"
-    else
-        od -An -tx1 -N4 -j4 "$FILE" | tr -d ' \n'
-    fi
-}
+DEFAULT_SDK="36"  #branch sixteen
 
 PATCH_MARKER_FILE="$WORKSPACE/.patch_markers"
 
-DO_SIGN_APK="true"
-CERT_PEM="$PREBUILTS/signapk/keys/aosp_testkey.x509.pem"
-CERT_PK8="$PREBUILTS/signapk/keys/aosp_testkey.pk8"
+DO_SIGN_APK="false"  # coz disabled apk signature verification on framework.jar as of now
+CERT_PEM=""
+CERT_PK8=""
 
 DECOMPILE_RES=true
 
@@ -53,54 +42,26 @@ APK_TO_DECOMPILE_RES=(
 
 declare -A PATCH_CACHE
 
-# ReCoreUI sets WORKSPACE before sourcing this script.
-# Keep Apktool frameworks inside the current workspace so apktool does not
-# fall back to ~/.local/share/apktool/framework.
-FRAMEWORK_DIR="${WORKSPACE}/.apktool/framework"
-
 INSTALL_FRAMEWORK()
 {
     local FRAMEWORK_APK="$WORKSPACE/system/system/framework/framework-res.apk"
     local SDK="$DEFAULT_SDK"
 
     if [[ -f "$BUILD_PROP" ]]; then
-        local PROP_SDK
-        PROP_SDK=$(BPROP "system" "ro.build.version.sdk" | cut -d'=' -f2 | tr -d '[:space:]')
+        local PROP_SDK=$(BPROP "system" "ro.build.version.sdk" | cut -d'=' -f2 | tr -d '[:space:]')
         [[ -n "$PROP_SDK" ]] && SDK="$PROP_SDK"
     fi
 
-    [[ ! -f "$FRAMEWORK_APK" ]] && \
-        ERROR_EXIT "framework-res.apk missing: $FRAMEWORK_APK"
-
-    # Always refresh the workspace-local Apktool framework.
-    #
-    # Apktool 3.0.3:
-    #   if -t 36 -> creates 1-36.apk
-    #   build     -> resolves package-id 1 through 1.apk
-    #
-    # Therefore the exact target framework must be available as both.
-    rm -rf "$FRAMEWORK_DIR"
-
-    mkdir -p "$FRAMEWORK_DIR" || \
-        ERROR_EXIT "Failed to create framework directory"
-
-    java -jar "$PREBUILTS/apktool/apktool.jar" if \
-        -p "$FRAMEWORK_DIR" \
-        -t "$SDK" \
-        "$FRAMEWORK_APK" > /dev/null 2>&1 || \
-        ERROR_EXIT "Failed to install framework"
-
     local INSTALLED="$FRAMEWORK_DIR/1-${SDK}.apk"
+    if [[ -f "$INSTALLED" ]]; then
+        echo "$SDK"
+        return 0
+    fi
 
-    [[ ! -f "$INSTALLED" ]] && \
-        ERROR_EXIT "Framework installation incomplete: $INSTALLED missing"
+    [[ ! -f "$FRAMEWORK_APK" ]] && ERROR_EXIT "framework-res.apk missing"
 
-    cp -f "$INSTALLED" "$FRAMEWORK_DIR/1.apk" || \
-        ERROR_EXIT "Failed to prepare Apktool build framework"
-
-    # Ensure build framework alias is byte-identical to installed framework.
-    cmp -s "$INSTALLED" "$FRAMEWORK_DIR/1.apk" || \
-        ERROR_EXIT "Framework alias verification failed"
+    java -jar "$PREBUILTS/apktool/apktool.jar" if -p "$FRAMEWORK_DIR" -t "$SDK" "$FRAMEWORK_APK" > /dev/null || \
+        ERROR_EXIT "Failed to install framework"
 
     echo "$SDK"
 }
@@ -111,38 +72,25 @@ FIND_TARGET()
 
     # JAR files are at system/framework
     if [[ "$FILE_NAME" == *.jar ]]; then
-        local SYSTEM_DIR
-        SYSTEM_DIR=$(GET_PARTITION_PATH "system") || true
-
+        local SYSTEM_DIR=$(GET_PARTITION_PATH "system") || true
         if [[ -n "$SYSTEM_DIR" && -f "$SYSTEM_DIR/framework/$FILE_NAME" ]]; then
             echo "$SYSTEM_DIR/framework/$FILE_NAME"
             return 0
         fi
     fi
 
-    # As of now, we don't need partition paths except them
+    # As of now , we dont need partition paths except them
     if [[ "$FILE_NAME" == *.apk ]]; then
         local PARTITIONS=("system" "system_ext" "product")
-
         for PART in "${PARTITIONS[@]}"; do
-            local PART_DIR
-            PART_DIR=$(GET_PARTITION_PATH "$PART") || continue
-
+            local PART_DIR=$(GET_PARTITION_PATH "$PART") || continue
             [[ -z "$PART_DIR" || ! -d "$PART_DIR" ]] && continue
 
             # For now we take app and priv-app cause preload and hidden apps are useless.
             local SUBDIRS=("app" "priv-app" "overlay")
-
             for SUBDIR in "${SUBDIRS[@]}"; do
                 [[ ! -d "$PART_DIR/$SUBDIR" ]] && continue
-
-                local FOUND
-                FOUND=$(find "$PART_DIR/$SUBDIR" \
-                    -maxdepth 3 \
-                    -name "$FILE_NAME" \
-                    -print \
-                    -quit 2>/dev/null)
-
+                local FOUND=$(find "$PART_DIR/$SUBDIR" -maxdepth 3 -name "$FILE_NAME" -print -quit 2>/dev/null)
                 if [[ -n "$FOUND" ]]; then
                     echo "$FOUND"
                     return 0
@@ -157,85 +105,52 @@ FIND_TARGET()
 DECOMPILE()
 {
     local FILE="$1"
-
     [[ -z "$FILE" ]] && ERROR_EXIT "No input file"
-
     [[ "$FILE" != /* ]] && FILE="$WORKSPACE/$FILE"
-
     [[ ! -f "$FILE" ]] && ERROR_EXIT "File not found: $FILE"
 
-    local NAME
-    NAME=$(basename "$FILE")
-
+    local NAME=$(basename "$FILE")
     local EXT="${NAME##*.}"
-
-    local DIR
-    DIR=$(dirname "$FILE")
-
+    local DIR=$(dirname "$FILE")
     local WORK_DIR="$DIR/${NAME}_decompiled"
 
     [[ -d "$WORK_DIR" ]] && rm -rf "$WORK_DIR"
-
     mkdir -p "$WORK_DIR"
 
     LOG_INFO "Decompiling $NAME"
 
-    local SDK
-    SDK=$(INSTALL_FRAMEWORK)
-
+    local SDK=$(INSTALL_FRAMEWORK)
     local API="$SDK"
-
-    local TEMP_DEX
-    TEMP_DEX=$(mktemp)
-
+    local TEMP_DEX=$(mktemp)
     local DEX_MAGIC=""
 
     if unzip -p "$FILE" "classes.dex" > "$TEMP_DEX" 2>/dev/null; then
         API=$(GET_DEX_API "$TEMP_DEX")
-        DEX_MAGIC=$(DEX_HEX_BYTES "$TEMP_DEX")
+        DEX_MAGIC=$(xxd -s 4 -l 4 -p "$TEMP_DEX")
     fi
-
     rm -f "$TEMP_DEX"
 
     mkdir -p "$WORK_DIR/.meta"
-
     echo "$API" > "$WORK_DIR/.meta/api"
     echo "$SDK" > "$WORK_DIR/.meta/sdk"
 
-    # DEX v041 Container Bypass (OneUI 8+).
-    # OneUI 8+ uses DEX 041 for services.jar.
+    # DEX v041 Container Bypass (OneUI 8+). I saw OneUI8+ uses dex 041 for services.jar
     if [[ "$DEX_MAGIC" == "30343100" ]]; then
 
         # Decompile with --no-src
-        java -jar "$PREBUILTS/apktool/apktool.jar" d \
-            -f \
-            -j "$USABLE_THREADS" \
-            -o "$WORK_DIR" \
-            -p "$FRAMEWORK_DIR" \
-            -t "$SDK" \
-            -s \
-            "$FILE" > /dev/null 2>&1 || \
+        java -jar "$PREBUILTS/apktool/apktool.jar" d -api "$API" -f -j "$USABLE_THREADS" \
+            -o "$WORK_DIR" -p "$FRAMEWORK_DIR" -t "$SDK" -s "$FILE" > /dev/null 2>&1 || \
             ERROR_EXIT "Decompile failed"
 
-        # Baksmali each dex part
+        # Baksmali each dex parts
         local PART=1
-
         while true; do
             local INPUT="$FILE/classes.dex"
             local OUT="smali"
+            [[ $PART -gt 1 ]] && INPUT="$FILE/classes.dex/$PART" && OUT="smali_classes$PART"
 
-            [[ $PART -gt 1 ]] && \
-                INPUT="$FILE/classes.dex/$PART" && \
-                OUT="smali_classes$PART"
-
-            java -jar "$PREBUILTS/smali/baksmali.jar" d \
-                -a "$API" \
-                -j "$USABLE_THREADS" \
-                --ac false \
-                --di false \
-                -l \
-                -o "$WORK_DIR/$OUT" \
-                "$INPUT" > /dev/null 2>&1
+            java -jar "$PREBUILTS/smali/baksmali.jar" d -a "$API" -j "$USABLE_THREADS" \
+                --ac false --di false -l -o "$WORK_DIR/$OUT" "$INPUT" > /dev/null 2>&1
 
             if [[ $? -ne 0 || ! -d "$WORK_DIR/$OUT" ]]; then
                 rm -rf "$WORK_DIR/$OUT"
@@ -243,44 +158,40 @@ DECOMPILE()
             fi
 
             ((PART++))
-
             [[ $PART -gt 99 ]] && break
         done
-
         rm -f "$WORK_DIR/classes"*.dex
-
     else
 
         # Standard flags
-        local FLAGS=(
-            "-f"
-            "-j" "$USABLE_THREADS"
-            "-o" "$WORK_DIR"
-            "-p" "$FRAMEWORK_DIR"
-        )
+        local FLAGS=("-f" "-j" "$USABLE_THREADS" "-o" "$WORK_DIR" "-p" "$FRAMEWORK_DIR"  )
 
-        # Resource decompile for listed APKs
+        # Resource decompile for listed APKs we declared on top
         local IN_LIST="false"
-
         for ITEM in "${APK_TO_DECOMPILE_RES[@]}"; do
-            if [[ "$ITEM" == "$NAME" ]]; then
-                IN_LIST="true"
-                break
-            fi
+            [[ "$ITEM" == "$NAME" ]] && IN_LIST="true" && break
         done
 
         if ! GET_FEATURE "DECOMPILE_RES" || [[ "$IN_LIST" != "true" ]]; then
             FLAGS+=("-r")
         fi
 
-        # --no-debug-info is equivalent to the required baksmali flags,
-        # so we don't need to baksmali again here.
-        java -jar "$PREBUILTS/apktool/apktool.jar" \
-            d \
-            --no-debug-info \
-            "${FLAGS[@]}" \
-            "$FILE" > /dev/null 2>&1 || \
+        # --no-debug-info is equals to baksmali --ac false and other flags and similarly use .locals instead of registers , so we can skip baksmali here.
+        java -jar "$PREBUILTS/apktool/apktool.jar" d --no-debug-info "${FLAGS[@]}" "$FILE" > /dev/null 2>&1 || \
             ERROR_EXIT "Decompile failed"
+
+
+        # Baksmali all DEX files
+        #find "$WORK_DIR" -maxdepth 1 -name "*.dex" | while read -r DEX; do
+        #    local D_NAME=$(basename "$DEX")
+        #    local OUT="smali"
+        #    [[ "$D_NAME" != "classes.dex" ]] && OUT="smali_${D_NAME%.dex}"
+
+        #   java -jar "$PREBUILTS/smali/baksmali.jar" d -a "$API" --ac false --di false \
+        #        -j "$USABLE_THREADS" -l -o "$WORK_DIR/$OUT" "$DEX" > /dev/null 2>&1
+
+        #   rm -f "$DEX"
+        #done
     fi
 
     # Extract extra resources for JARs (Issue found on OneUI6+)
@@ -304,33 +215,24 @@ BUILD()
 
     local NAME
     NAME=$(basename "$FILE")
-
     local EXT="${NAME##*.}"
-
     local DIR
     DIR=$(dirname "$FILE")
-
     local WORK_DIR="$DIR/${NAME}_decompiled"
-
     local DIST_DIR="$WORK_DIR/dist"
-
     local BUILT_FILE="$DIST_DIR/$NAME"
 
-    [[ ! -d "$WORK_DIR" ]] && \
-        ERROR_EXIT "Decompiled folder not found: $WORK_DIR"
+    [[ ! -d "$WORK_DIR" ]] && ERROR_EXIT "Decompiled folder not found: $WORK_DIR"
 
     LOG_INFO "Building $NAME"
 
     local API="$DEFAULT_SDK"
-
     if [[ -f "$WORK_DIR/.meta/api" ]]; then
         API=$(cat "$WORK_DIR/.meta/api")
     fi
 
     mkdir -p "$DIST_DIR"
 
-    # Apktool 3.0.3 BUILD does not support -t.
-    # Package-id 1 is resolved through FRAMEWORK_DIR/1.apk.
     local APKTOOL_FLAGS=(
         "b"
         "-j" "$USABLE_THREADS"
@@ -339,115 +241,80 @@ BUILD()
     )
 
     if [[ "$EXT" == "apk" ]]; then
-        # Preserve original META-INF and manifest structure.
+        # -c / --copy-original: Copies original META-INF and manifest
+        # (preserves original structure). apktool renamed the short flag at
+        # some point; 3.0.3 (the jar in prebuilts/apktool/) only accepts the
+        # long form, so -c now hard-fails every single APK rebuild with
+        # "Unrecognized option: -c". Same flag, same behavior, just the
+        # spelling apktool 3.0.3 actually accepts.
         APKTOOL_FLAGS+=("--copy-original")
     fi
 
     local BUILD_OUTPUT
-
-    if ! BUILD_OUTPUT=$(java -jar "$PREBUILTS/apktool/apktool.jar" \
-        "${APKTOOL_FLAGS[@]}" \
-        "$WORK_DIR" 2>&1); then
-
+    if ! BUILD_OUTPUT=$(java -jar "$PREBUILTS/apktool/apktool.jar" "${APKTOOL_FLAGS[@]}" "$WORK_DIR" 2>&1); then
         LOG_WARN "Recompilation failed. Check logs below:"
 
-        # Don't show normal I: progress until an error.
+        # We dont show I: information of progress until get an error. Same thing -q flag do
         echo "$BUILD_OUTPUT" | sed '/^I:/d'
-
         return 1
     fi
 
     if [[ "$EXT" == "apk" ]]; then
-
+        # Sign the apk if turned on
         if [[ "$DO_SIGN_APK" == "true" ]]; then
-
             LOG_INFO "Signing APK..."
-
             local UNSIGNED="$DIST_DIR/${NAME}.unsigned"
-
             mv "$BUILT_FILE" "$UNSIGNED"
 
-            if ! java -jar "$PREBUILTS/signapk/signapk.jar" \
-                "$CERT_PEM" \
-                "$CERT_PK8" \
-                "$UNSIGNED" \
-                "$BUILT_FILE" > /dev/null 2>&1; then
-
+            if ! java -jar "$PREBUILTS/signapk/signapk.jar" "$CERT_PEM" "$CERT_PK8" \
+                "$UNSIGNED" "$BUILT_FILE" > /dev/null 2>&1; then
                 ERROR_EXIT "Sign failed"
             fi
-
             rm -f "$UNSIGNED"
-
         else
-
             # Zipalign APKs
             # https://developer.android.com/tools/zipalign
-
             local ALIGNED="$DIST_DIR/aligned.apk"
-
-            if zipalign -p -f 4 \
-                "$BUILT_FILE" \
-                "$ALIGNED" > /dev/null 2>&1; then
-
+            if zipalign -p -f 4 "$BUILT_FILE" "$ALIGNED" > /dev/null 2>&1; then
                 mv -f "$ALIGNED" "$BUILT_FILE"
-
             else
                 ERROR_EXIT "Apk Zipalign failed."
             fi
         fi
     fi
 
-    # Add missing resources for JARs [Android14+ bug]
+    # Add missing resources for JARs [Android14+ bug] See DECOMPILE function for more info.
     if [[ "$EXT" == "jar" && -d "$WORK_DIR/__res__" ]]; then
-        (
-            cd "$WORK_DIR/__res__" || \
-                ERROR_EXIT "Cannot enter resource directory"
-
-            zip -qr "$BUILT_FILE" .
-        )
+        (cd "$WORK_DIR/__res__" && zip -qr "$BUILT_FILE" .)
     fi
 
     mv -f "$BUILT_FILE" "$FILE"
-
     rm -rf "$WORK_DIR"
 
     rm -f "$DIR/$NAME.prof" "$DIR/$NAME.bprof"
-
     rm -rf "$DIR/oat"
 
     LOG_END "Built $NAME"
-
     return 0
 }
 
-# For instance, patch failed we will start from scratch.
+# For instance , patch failed we will start from scratch
 RESTORE_TARGET()
 {
     local TARGET_NAME="$1"
     local CURRENT_PATH="$2"
-
-    local SOURCE_DIR
-    SOURCE_DIR=$(GET_FW_DIR "main") || \
-        ERROR_EXIT "Workspace not found"
+    local SOURCE_DIR=$(GET_FW_DIR "main") || ERROR_EXIT "Workspace not found"
 
     local SOURCE=""
-
     if [[ "$TARGET_NAME" == *.jar ]]; then
-
         SOURCE="$SOURCE_DIR/system/system/framework/$TARGET_NAME"
-
     elif [[ "$TARGET_NAME" == *.apk ]]; then
 
+        # As of now , we dont need partition paths except them
         local PARTITIONS=("system/system" "system_ext" "product")
-
         for PART in "${PARTITIONS[@]}"; do
             [[ ! -d "$SOURCE_DIR/$PART" ]] && continue
-
-            SOURCE=$(find "$SOURCE_DIR/$PART" \
-                -name "$TARGET_NAME" \
-                -print \
-                -quit 2>/dev/null)
-
+            SOURCE=$(find "$SOURCE_DIR/$PART" -name "$TARGET_NAME" -print -quit 2>/dev/null)
             [[ -n "$SOURCE" ]] && break
         done
     fi
@@ -458,8 +325,7 @@ RESTORE_TARGET()
         return 0
     fi
 
-    cp -f "$SOURCE" "$CURRENT_PATH" || \
-        ERROR_EXIT "Failed to revert changes for $TARGET_NAME"
+    cp -f "$SOURCE" "$CURRENT_PATH" || ERROR_EXIT "Failed to revert changes for $TARGET_NAME"
 
     LOG_END "Restored $TARGET_NAME"
 
@@ -471,70 +337,39 @@ BUILD_ALL()
     local FOUND="false"
 
     while IFS= read -r -d '' WORK_DIR; do
-
         FOUND="true"
-
-        local DIR_NAME
-        DIR_NAME=$(basename "$WORK_DIR")
-
+        local DIR_NAME=$(basename "$WORK_DIR")
         local FILE_NAME="${DIR_NAME%_decompiled}"
-
-        local PARENT
-        PARENT=$(dirname "$WORK_DIR")
-
+        local PARENT=$(dirname "$WORK_DIR")
         local ORIGINAL="$PARENT/$FILE_NAME"
-
         local RELATIVE="${ORIGINAL#$WORKSPACE/}"
 
         if [[ -f "$ORIGINAL" ]]; then
-            BUILD "$RELATIVE" || \
-                ERROR_EXIT "Failed to build $FILE_NAME"
+            BUILD "$RELATIVE" || ERROR_EXIT "Failed to build $FILE_NAME"
         else
             LOG_WARN "Source missing for $FILE_NAME"
         fi
-
-    done < <(
-        find "$WORKSPACE" \
-            -type d \
-            -name "*_decompiled" \
-            -print0
-    )
+    done < <(find "$WORKSPACE" -type d -name "*_decompiled" -print0)
 
     [[ "$FOUND" == "false" ]] && return 0
 
     return 0
 }
 
-# https://github.com/iBotPeaches/Apktool/issues/3775
+#https://github.com/iBotPeaches/Apktool/issues/3775
 GET_DEX_API()
 {
     local DEX_FILE="$1"
-
-    local HEX_SIG
-    HEX_SIG=$(DEX_HEX_BYTES "$DEX_FILE")
+    local HEX_SIG=$(xxd -s 4 -l 4 -p "$DEX_FILE")
 
     case "$HEX_SIG" in
-        "30333500")
-            echo "23"
-            ;;
-        "30333700")
-            echo "25"
-            ;;
-        "30333800")
-            echo "27"
-            ;;
-        "30333900")
-            echo "29"
-            ;;
-        "30343000")
-            echo "34"
-            ;;
-        "30343100")
-            echo "35"
-            ;;
-        *)
-            echo "$DEFAULT_SDK"
-            ;;
+        "30333500") echo "23" ;;
+        "30333700") echo "25" ;;
+        "30333800") echo "27" ;;
+        "30333900") echo "29" ;;
+        "30343000") echo "34" ;;
+        "30343100") echo "35" ;;
+        *) echo "$DEFAULT_SDK" ;;
     esac
 }
 
@@ -549,29 +384,15 @@ _APKTOOL_PATCH()
     )
 
     local TARGETS=()
-
     declare -A TARGET_MAP
 
     for BASE in "${SEARCH_PATHS[@]}"; do
-
         [[ ! -d "$BASE" ]] && continue
-
         while IFS= read -r -d '' DIR; do
-
-            local NAME
-            NAME=$(basename "$DIR")
-
-            [[ -z "${TARGET_MAP[$NAME]}" ]] && \
-                TARGETS+=("$NAME")
-
+            local NAME=$(basename "$DIR")
+            [[ -z "${TARGET_MAP[$NAME]}" ]] && TARGETS+=("$NAME")
             TARGET_MAP[$NAME]+="$DIR "
-
-        done < <(
-            find "$BASE" \
-                -type d \
-                \( -name "*.apk" -o -name "*.jar" \) \
-                -print0
-        )
+        done < <(find "$BASE" -type d \( -name "*.apk" -o -name "*.jar" \) -print0)
     done
 
     if [[ ${#TARGETS[@]} -eq 0 ]]; then
@@ -581,15 +402,12 @@ _APKTOOL_PATCH()
     fi
 
     for TARGET in "${TARGETS[@]}"; do
-
         local PATCH_DIRS=(${TARGET_MAP[$TARGET]})
 
         local HASH=""
-
         for P_DIR in "${PATCH_DIRS[@]}"; do
             HASH+=$(CALC_HASH "$P_DIR")
         done
-
         HASH=$(echo "$HASH" | md5sum | cut -d' ' -f1)
 
         local CACHED="${PATCH_CACHE[$TARGET]:-}"
@@ -598,112 +416,66 @@ _APKTOOL_PATCH()
             continue
         fi
 
-        local TARGET_FILE
-        TARGET_FILE=$(FIND_TARGET "$TARGET")
-
+        local TARGET_FILE=$(FIND_TARGET "$TARGET")
         if [[ -z "$TARGET_FILE" ]]; then
             LOG_WARN "File not found $TARGET"
             continue
         fi
 
-        local WORK_DIR
-        WORK_DIR="$(dirname "$TARGET_FILE")/${TARGET}_decompiled"
+        local WORK_DIR="$(dirname "$TARGET_FILE")/${TARGET}_decompiled"
 
         if [[ -n "$CACHED" && "$CACHED" != "$HASH" ]]; then
-
             LOG_INFO "Changes detected in $TARGET"
-
-            [[ -d "$WORK_DIR" ]] && \
-                rm -rf "$WORK_DIR"
-
-            RESTORE_TARGET "$TARGET" "$TARGET_FILE" || \
-                ERROR_EXIT "Failed to revert changes $TARGET"
+            [[ -d "$WORK_DIR" ]] && rm -rf "$WORK_DIR"
+            RESTORE_TARGET "$TARGET" "$TARGET_FILE" || ERROR_EXIT "Failed to revert changes $TARGET"
         fi
 
         if [[ ! -d "$WORK_DIR" ]]; then
-
             local RELATIVE="${TARGET_FILE#$WORKSPACE/}"
-
-            DECOMPILE "$RELATIVE" || \
-                ERROR_EXIT "Decompile failed: $TARGET"
+            DECOMPILE "$RELATIVE" || ERROR_EXIT "Decompile failed: $TARGET"
         fi
 
         local PATCHES=()
-
         for P_DIR in "${PATCH_DIRS[@]}"; do
-
             while IFS= read -r -d '' P; do
                 PATCHES+=("$P")
-            done < <(
-                find "$P_DIR" \
-                    -maxdepth 1 \
-                    \( -name "*.patch" -o -name "*.smalipatch" \) \
-                    -type f \
-                    -print0
-            )
-
+            done < <(find "$P_DIR" -maxdepth 1 \( -name "*.patch" -o -name "*.smalipatch" \) -type f -print0)
         done
+        IFS=$'\n' PATCHES=($(sort -V <<<"${PATCHES[*]}")); unset IFS
 
-        IFS=$'\n'
-        PATCHES=($(sort -V <<<"${PATCHES[*]}"))
-        unset IFS
+        # Apply our patches
+        # TODO: show error logs only , wil do later
 
-        # Apply patches
         for P in "${PATCHES[@]}"; do
-
-            local P_NAME
-            P_NAME=$(basename "$P")
-
+            local P_NAME=$(basename "$P")
             LOG_INFO "Applying $P_NAME"
 
             if [[ "$P_NAME" == *.patch ]]; then
-
                 (
-                    cd "$WORK_DIR" || \
-                        ERROR_EXIT "Cannot change directory to $WORK_DIR"
+                    cd "$WORK_DIR" || ERROR_EXIT "Cannot change directory to $WORK_DIR"
 
-                    # -p1: Strip one leading directory component.
-                    # -s: Work silently unless an error occurs.
-                    # -f: Force/Ignore bad Prereq patches.
-                    # -l: Ignore whitespace changes.
-                    # --dry-run: Test patch before modifying files.
-
-                    patch \
-                        -p1 \
-                        -s \
-                        -f \
-                        -l \
-                        --dry-run < "$P" > /dev/null 2>&1
+                    # -p1: Strip one leading directory component from file paths.
+                    # -s: Work silently unless an error occurs. (Clean output)
+                    # -f: Force/Ignore bad Prereq patches, assume unreversed.
+                    # -l: Ignore white space changes (line endings, indentation) for better matching.
+                    # --dry-run: Test the patch without modifying any files.
+                    #
+                    patch -p1 -s -f -l --dry-run < "$P" >/dev/null 2>&1
 
                     if [[ $? -eq 0 ]]; then
-
-                        patch \
-                            -p1 \
-                            -s \
-                            -f \
-                            -l < "$P" > /dev/null 2>&1
-
+                        patch -p1 -s -f -l < "$P" >/dev/null 2>&1
                     else
                         exit 1
                     fi
-
                 ) || {
-
                     rm -rf "$WORK_DIR"
-
                     ERROR_EXIT "Patch failed for $P_NAME"
                 }
 
             elif [[ "$P_NAME" == *.smalipatch ]]; then
-
                 local SMALI_BIN="$PREBUILTS/smalipatch/smali_patch.py"
-
-                python3 "$SMALI_BIN" \
-                    "$WORK_DIR" \
-                    "$P" || {
-
+                python3 "$SMALI_BIN" "$WORK_DIR" "$P" || {
                     rm -rf "$WORK_DIR"
-
                     ERROR_EXIT "Smali patch failed for $P_NAME"
                 }
             fi
@@ -711,43 +483,24 @@ _APKTOOL_PATCH()
 
         # Merge resources and run scripts
         for P_DIR in "${PATCH_DIRS[@]}"; do
-
             for SUB in "res" "smali" "assets" "lib"; do
-
-                [[ -d "$P_DIR/$SUB" ]] && \
-                    rsync -a \
-                        "$P_DIR/$SUB/" \
-                        "$WORK_DIR/$SUB/"
+                [[ -d "$P_DIR/$SUB" ]] && rsync -a "$P_DIR/$SUB/" "$WORK_DIR/$SUB/"
             done
-
             for S_CLASS in "$P_DIR"/smali_classes*; do
-
-                [[ -d "$S_CLASS" ]] && \
-                    rsync -a \
-                        "$S_CLASS/" \
-                        "$WORK_DIR/$(basename "$S_CLASS")/"
+                [[ -d "$S_CLASS" ]] && rsync -a "$S_CLASS/" "$WORK_DIR/$(basename "$S_CLASS")/"
             done
 
             for SCRIPT in "$P_DIR"/*.sh; do
-
                 if [[ -f "$SCRIPT" ]]; then
-
                     LOG_INFO "Executing $(basename "$SCRIPT")"
-
-                    (
-                        cd "$WORK_DIR" && \
-                        . "$SCRIPT"
-                    ) || \
-                        ERROR_EXIT "Script failed: $(basename "$SCRIPT")"
+                    (cd "$WORK_DIR" && . "$SCRIPT") || ERROR_EXIT "Script failed: $(basename "$SCRIPT")"
                 fi
-
             done
         done
 
         _UPDATE_MARKER "$TARGET" "$HASH"
 
         LOG_END "Patched $TARGET"
-
     done
 
     BUILD_ALL
@@ -766,8 +519,7 @@ ADD_PATCH()
 
     local DEST="$WORKSPACE/patches/$TARGET"
 
-    mkdir -p "$DEST" || \
-        ERROR_EXIT "Failed to create $DEST"
+    mkdir -p "$DEST" || ERROR_EXIT "Failed to create $DEST"
 
     cp -a "$SOURCE" "$DEST/" || \
         ERROR_EXIT "Failed to add patch $SOURCE to $DEST"
