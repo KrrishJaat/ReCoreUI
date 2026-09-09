@@ -42,6 +42,63 @@ APK_TO_DECOMPILE_RES=(
 
 declare -A PATCH_CACHE
 
+# Every apktool/baksmali/patch/sign/zipalign invocation below used to redirect
+# to /dev/null on failure, so a failure only ever showed a generic one-liner
+# like "Decompile failed" with zero indication of *why* (this is exactly how
+# the earlier -api and -c flag incompatibilities stayed invisible). Every such
+# call now goes through _APKTOOL_RUN_LOGGED / _APKTOOL_LOG_WRITE instead:
+# full command + output + exit code always gets written to a log file under
+# $_APKTOOL_LOG_DIR, and on failure the tail of it is also printed to stderr
+# so it shows up directly in the build console (e.g. the GitHub Actions log)
+# without needing the log file to survive the run. Success stays as quiet as
+# before - only failures print anything extra.
+_APKTOOL_LOG_DIR="$WORKSPACE/logs/apktool"
+
+_APKTOOL_LOG_WRITE()
+{
+    # _APKTOOL_LOG_WRITE <description> <captured output> <exit code>
+    # Persists one already-captured run to its own timestamped log file and
+    # prints the file's path. Always prints a one-line failure notice to
+    # stderr on a non-zero exit code, even when the caller doesn't otherwise
+    # show anything (e.g. the baksmali per-part loop, which only breaks
+    # silently on failure today).
+    local DESC="$1" OUTPUT="$2" RC="$3"
+    mkdir -p "$_APKTOOL_LOG_DIR" 2>/dev/null
+    local SAFE
+    SAFE="$(printf '%s' "$DESC" | tr -c 'A-Za-z0-9._-' '_')"
+    local LOG_FILE="$_APKTOOL_LOG_DIR/$(date -u +%Y%m%dT%H%M%S)_${SAFE}.log"
+    {
+        printf '=== %s ===\nexit code: %s\ntime (UTC): %s\n\n%s\n' \
+            "$DESC" "$RC" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$OUTPUT"
+    } > "$LOG_FILE" 2>/dev/null
+    if [[ "$RC" != "0" ]]; then
+        printf '\033[0;31mX %s failed (exit %s)\033[0m - full output: %s\n' "$DESC" "$RC" "$LOG_FILE" >&2
+    fi
+    printf '%s\n' "$LOG_FILE"
+}
+
+_APKTOOL_RUN_LOGGED()
+{
+    # _APKTOOL_RUN_LOGGED "<description>" -- <command> [args...]
+    # Runs a command, capturing combined stdout+stderr regardless of outcome,
+    # logs it via _APKTOOL_LOG_WRITE, and on failure also prints the last 40
+    # lines to stderr immediately (the log file is a convenience for later -
+    # the console is what's guaranteed to be visible in CI). Return code is
+    # the wrapped command's own, so existing "|| ERROR_EXIT ..." callers are
+    # unchanged.
+    local DESC="$1"; shift
+    [[ "${1:-}" == "--" ]] && shift
+    local OUTPUT RC LOG_FILE
+    OUTPUT="$("$@" 2>&1)"
+    RC=$?
+    LOG_FILE="$(_APKTOOL_LOG_WRITE "$DESC" "$OUTPUT" "$RC")"
+    if [[ $RC -ne 0 ]]; then
+        printf '%s\n' "$OUTPUT" | tail -n 40 >&2
+        printf '\033[0;33m(last 40 lines shown above - full output in %s)\033[0m\n' "$LOG_FILE" >&2
+    fi
+    return $RC
+}
+
 INSTALL_FRAMEWORK()
 {
     local FRAMEWORK_APK="$WORKSPACE/system/system/framework/framework-res.apk"
@@ -60,8 +117,9 @@ INSTALL_FRAMEWORK()
 
     [[ ! -f "$FRAMEWORK_APK" ]] && ERROR_EXIT "framework-res.apk missing"
 
-    java -jar "$PREBUILTS/apktool/apktool.jar" if -p "$FRAMEWORK_DIR" -t "$SDK" "$FRAMEWORK_APK" > /dev/null || \
-        ERROR_EXIT "Failed to install framework"
+    _APKTOOL_RUN_LOGGED "Install framework $SDK" -- \
+        java -jar "$PREBUILTS/apktool/apktool.jar" if -p "$FRAMEWORK_DIR" -t "$SDK" "$FRAMEWORK_APK" || \
+        ERROR_EXIT "Failed to install framework $SDK - see $_APKTOOL_LOG_DIR"
 
     echo "$SDK"
 }
@@ -138,9 +196,10 @@ DECOMPILE()
     if [[ "$DEX_MAGIC" == "30343100" ]]; then
 
         # Decompile with --no-src
-        java -jar "$PREBUILTS/apktool/apktool.jar" d -api "$API" -f -j "$USABLE_THREADS" \
-            -o "$WORK_DIR" -p "$FRAMEWORK_DIR" -t "$SDK" -s "$FILE" > /dev/null 2>&1 || \
-            ERROR_EXIT "Decompile failed"
+        _APKTOOL_RUN_LOGGED "Decompile $NAME (dex v041 container)" -- \
+            java -jar "$PREBUILTS/apktool/apktool.jar" d -f -j "$USABLE_THREADS" \
+            -o "$WORK_DIR" -p "$FRAMEWORK_DIR" -t "$SDK" -s "$FILE" || \
+            ERROR_EXIT "Decompile failed: $NAME (dex v041 container path) - see $_APKTOOL_LOG_DIR"
 
         # Baksmali each dex parts
         local PART=1
@@ -149,8 +208,9 @@ DECOMPILE()
             local OUT="smali"
             [[ $PART -gt 1 ]] && INPUT="$FILE/classes.dex/$PART" && OUT="smali_classes$PART"
 
-            java -jar "$PREBUILTS/smali/baksmali.jar" d -a "$API" -j "$USABLE_THREADS" \
-                --ac false --di false -l -o "$WORK_DIR/$OUT" "$INPUT" > /dev/null 2>&1
+            _APKTOOL_RUN_LOGGED "Baksmali $NAME part $PART" -- \
+                java -jar "$PREBUILTS/smali/baksmali.jar" d -a "$API" -j "$USABLE_THREADS" \
+                --ac false --di false -l -o "$WORK_DIR/$OUT" "$INPUT"
 
             if [[ $? -ne 0 || ! -d "$WORK_DIR/$OUT" ]]; then
                 rm -rf "$WORK_DIR/$OUT"
@@ -177,8 +237,9 @@ DECOMPILE()
         fi
 
         # --no-debug-info is equals to baksmali --ac false and other flags and similarly use .locals instead of registers , so we can skip baksmali here.
-        java -jar "$PREBUILTS/apktool/apktool.jar" d --no-debug-info "${FLAGS[@]}" "$FILE" > /dev/null 2>&1 || \
-            ERROR_EXIT "Decompile failed"
+        _APKTOOL_RUN_LOGGED "Decompile $NAME" -- \
+            java -jar "$PREBUILTS/apktool/apktool.jar" d --no-debug-info "${FLAGS[@]}" "$FILE" || \
+            ERROR_EXIT "Decompile failed: $NAME - see $_APKTOOL_LOG_DIR"
 
 
         # Baksmali all DEX files
@@ -252,12 +313,14 @@ BUILD()
 
     local BUILD_OUTPUT
     if ! BUILD_OUTPUT=$(java -jar "$PREBUILTS/apktool/apktool.jar" "${APKTOOL_FLAGS[@]}" "$WORK_DIR" 2>&1); then
-        LOG_WARN "Recompilation failed. Check logs below:"
+        _APKTOOL_LOG_WRITE "Build $NAME" "$BUILD_OUTPUT" 1 > /dev/null
+        LOG_WARN "Recompilation failed. Check logs below: (full log: $_APKTOOL_LOG_DIR)"
 
         # We dont show I: information of progress until get an error. Same thing -q flag do
         echo "$BUILD_OUTPUT" | sed '/^I:/d'
         return 1
     fi
+    _APKTOOL_LOG_WRITE "Build $NAME" "$BUILD_OUTPUT" 0 > /dev/null
 
     if [[ "$EXT" == "apk" ]]; then
         # Sign the apk if turned on
@@ -266,19 +329,20 @@ BUILD()
             local UNSIGNED="$DIST_DIR/${NAME}.unsigned"
             mv "$BUILT_FILE" "$UNSIGNED"
 
-            if ! java -jar "$PREBUILTS/signapk/signapk.jar" "$CERT_PEM" "$CERT_PK8" \
-                "$UNSIGNED" "$BUILT_FILE" > /dev/null 2>&1; then
-                ERROR_EXIT "Sign failed"
+            if ! _APKTOOL_RUN_LOGGED "Sign $NAME" -- \
+                java -jar "$PREBUILTS/signapk/signapk.jar" "$CERT_PEM" "$CERT_PK8" \
+                "$UNSIGNED" "$BUILT_FILE"; then
+                ERROR_EXIT "Sign failed: $NAME - see $_APKTOOL_LOG_DIR"
             fi
             rm -f "$UNSIGNED"
         else
             # Zipalign APKs
             # https://developer.android.com/tools/zipalign
             local ALIGNED="$DIST_DIR/aligned.apk"
-            if zipalign -p -f 4 "$BUILT_FILE" "$ALIGNED" > /dev/null 2>&1; then
+            if _APKTOOL_RUN_LOGGED "Zipalign $NAME" -- zipalign -p -f 4 "$BUILT_FILE" "$ALIGNED"; then
                 mv -f "$ALIGNED" "$BUILT_FILE"
             else
-                ERROR_EXIT "Apk Zipalign failed."
+                ERROR_EXIT "Apk Zipalign failed: $NAME - see $_APKTOOL_LOG_DIR"
             fi
         fi
     fi
@@ -460,16 +524,23 @@ _APKTOOL_PATCH()
                     # -l: Ignore white space changes (line endings, indentation) for better matching.
                     # --dry-run: Test the patch without modifying any files.
                     #
-                    patch -p1 -s -f -l --dry-run < "$P" >/dev/null 2>&1
+                    DRY_OUTPUT=$(patch -p1 -f -l --dry-run < "$P" 2>&1)
+                    DRY_RC=$?
 
-                    if [[ $? -eq 0 ]]; then
-                        patch -p1 -s -f -l < "$P" >/dev/null 2>&1
+                    if [[ $DRY_RC -eq 0 ]]; then
+                        REAL_OUTPUT=$(patch -p1 -f -l < "$P" 2>&1)
+                        REAL_RC=$?
+                        _APKTOOL_LOG_WRITE "GNU patch $P_NAME" "$REAL_OUTPUT" "$REAL_RC" > /dev/null
+                        [[ $REAL_RC -ne 0 ]] && printf '%s\n' "$REAL_OUTPUT" | tail -n 40 >&2
+                        exit $REAL_RC
                     else
+                        _APKTOOL_LOG_WRITE "GNU patch $P_NAME (dry-run)" "$DRY_OUTPUT" "$DRY_RC" > /dev/null
+                        printf '%s\n' "$DRY_OUTPUT" | tail -n 40 >&2
                         exit 1
                     fi
                 ) || {
                     rm -rf "$WORK_DIR"
-                    ERROR_EXIT "Patch failed for $P_NAME"
+                    ERROR_EXIT "Patch failed for $P_NAME - see $_APKTOOL_LOG_DIR"
                 }
 
             elif [[ "$P_NAME" == *.smalipatch ]]; then
