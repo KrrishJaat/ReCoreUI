@@ -1,7 +1,14 @@
 if ! GET_FEATURE DEVICE_USE_STOCK_BASE; then
 
     SYSROOT="$WORKSPACE/system/system"
-    SRCROOT="$BLOBS/pa3q/system/system"
+
+    # EXTRA firmware is the preferred source for eSIM blobs.
+    # If EXTRA firmware is not configured, the add-blobs case cannot run.
+    if [[ -n "${EXTRA_MODEL:-}" ]]; then
+        SRCROOT="$WORKDIR/$EXTRA_MODEL/system/system"
+    else
+        SRCROOT=""
+    fi
 
     ############################################
     # CASE 1: Both Source and Device HAVE eSIM
@@ -53,7 +60,12 @@ if ! GET_FEATURE DEVICE_USE_STOCK_BASE; then
     elif ! GET_FEATURE SOURCE_HAVE_ESIM_SUPPORT && \
          GET_FEATURE DEVICE_HAVE_ESIM_SUPPORT; then
 
-        LOG_BEGIN "Device supports eSIM but source does NOT — adding blobs from pa3q"
+        if [[ -z "$SRCROOT" || ! -d "$SRCROOT" ]]; then
+            LOG_END "Device supports eSIM but source does NOT — EXTRA firmware unavailable, skipping"
+            return 0
+        fi
+
+        LOG_BEGIN "Device supports eSIM but source does NOT — adding blobs from EXTRA firmware"
 
         # Add apps
         cp -a "$SRCROOT/priv-app/EsimClient" "$SYSROOT/"
@@ -82,7 +94,7 @@ if ! GET_FEATURE DEVICE_USE_STOCK_BASE; then
 
         FF_IF_DIFF "stock" "COMMON_CONFIG_EMBEDDED_SIM_SLOTSWITCH"
 
-        LOG_END "eSIM blobs added from pa3q"
+        LOG_END "eSIM blobs added from EXTRA firmware"
 
     fi
 
