@@ -12,7 +12,7 @@ BT_LIB_PATCH()
     local LIB_PATH="system/system/lib64/libbluetooth_jni.so"
 
     APEX_FILE=$(find "$WORKSPACE/system/system/apex" -name "com.android.bt*.apex" 2>/dev/null | head -n1)
-    [[ -z "$APEX_FILE" ]] && ERROR_EXIT "No Bluetooth APEX found"
+    [[ -z "$APEX_FILE" ]] && { LOG_INFO "No Bluetooth APEX found - skipping Bluetooth patch"; return 0; }
 
     CLEANED_PATH="${APEX_FILE#$WORKSPACE/}"
 
@@ -20,7 +20,7 @@ BT_LIB_PATCH()
         "lib64/libbluetooth_jni.so" \
         "$LIB_PATH"
 
-    [[ ! -f "$WORKSPACE/$LIB_PATH" ]] && ERROR_EXIT "Bluetooth JNI library not extracted"
+    [[ ! -f "$WORKSPACE/$LIB_PATH" ]] && { LOG_INFO "Bluetooth JNI library not extracted - skipping Bluetooth patch"; return 0; }
 
     SDK_VERSION_FULL="$(GET_PROP "system" "ro.system.build.version.sdk_full")"
     LOG_INFO "Detected SDK version: $SDK_VERSION_FULL"
@@ -64,7 +64,8 @@ BT_LIB_PATCH()
             )
             ;;
         *)
-            ERROR_EXIT "Unsupported SDK version: $SDK_VERSION_FULL"
+            LOG_INFO "Unsupported SDK version: $SDK_VERSION_FULL - skipping Bluetooth patch"
+            return 0
             ;;
     esac
 
@@ -76,8 +77,10 @@ BT_LIB_PATCH()
         }
     done
 
-    [[ "$PATCH_APPLIED" != true ]] && \
-        ERROR_EXIT "No patch available for Bluetooth library (SDK $SDK_VERSION_FULL)"
+    [[ "$PATCH_APPLIED" != true ]] && {
+        LOG_INFO "No matching Bluetooth patch for SDK $SDK_VERSION_FULL - skipping"
+        return 0
+    }
 
     return 0
 }
@@ -85,7 +88,10 @@ BT_LIB_PATCH()
 if ! EXISTS "system" "lib64/libbluetooth_jni.so"; then
     LOG_BEGIN "Applying Bluetooth library patch"
 
-    BT_LIB_PATCH || ERROR_EXIT "Bluetooth patching failed"
+    if ! BT_LIB_PATCH; then
+        LOG_INFO "Bluetooth patching failed - skipping and continuing"
+        return 0
+    fi
 
     LOG_END "Bluetooth library patch applied successfully"
 fi
