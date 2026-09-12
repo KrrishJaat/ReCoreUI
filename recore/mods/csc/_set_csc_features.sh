@@ -119,12 +119,6 @@ CSC_PROP() {
 
     LOG_INFO "Patching CSC features..."
 
-    find "$WORKSPACE/optics" -type f -exec \
-        sed -i -E 's/SM-S938(B|N)/'"$DEVICE_MODEL"'/g' {} +
-
-
-    ADD_FROM_FW "pa3q" "optics" "configs/carriers"
-
     # Decode OMC XMLs
     DECODE_ALL_OMC
 
