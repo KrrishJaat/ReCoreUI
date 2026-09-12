@@ -40,18 +40,28 @@ DOWNLOAD_FW() {
     do
         IFS="|" read -r FW_PREFIX DEVICE_MODEL REGION_CODE <<< "$CONFIG_ENTRY"
 
+        # EXTRA is optional. If its model or CSC is not configured, skip it.
+        if [[ "${FW_PREFIX,,}" == "extra" && ( -z "$DEVICE_MODEL" || -z "$REGION_CODE" ) ]]; then
+            continue
+        fi
+
         [[ -z "$DEVICE_MODEL" || -z "$REGION_CODE" ]] && continue
 
         if [[ -n "$TARGET_FIRMWARE" && "${FW_PREFIX,,}" != "${TARGET_FIRMWARE,,}" ]]; then
             continue
         fi
 
-        [[ -v "PROCESSED_MODELS[$DEVICE_MODEL]" ]] && continue
-        PROCESSED_MODELS["$DEVICE_MODEL"]=1
+        local PROCESS_KEY="${DEVICE_MODEL}|${REGION_CODE}"
+        [[ -v "PROCESSED_MODELS[$PROCESS_KEY]" ]] && continue
+        PROCESSED_MODELS["$PROCESS_KEY"]=1
 
         local PORT_VERSION=""
+        local EXTRA_VERSION=""
+
         if [[ "${FW_PREFIX,,}" == "main" && -n "${PORT_FIRMWARE:-}" ]]; then
             PORT_VERSION="$PORT_FIRMWARE"
+        elif [[ "${FW_PREFIX,,}" == "extra" && -n "${EXTRA_FIRMWARE:-}" ]]; then
+            EXTRA_VERSION="$EXTRA_FIRMWARE"
         fi
 
         FETCH_FW \
@@ -60,10 +70,12 @@ DOWNLOAD_FW() {
             "$REGION_CODE" \
             "$FW_BASE" \
             "$TEMP_DOWNLOAD_DIR" \
-            "$PORT_VERSION"
+            "$PORT_VERSION" \
+            "$EXTRA_VERSION"
     done
 
     rm -rf "$TEMP_DOWNLOAD_DIR"
+    PRINT_FIRMWARE_STORAGE
 }
 
 
@@ -74,6 +86,14 @@ FETCH_FW() {
     local BASE_DIR="$4"
     local TEMP_DIR="$5"
     local PORT_VERSION="${6:-}"
+    local EXTRA_VERSION="${7:-}"
+
+    local REQUESTED_VERSION=""
+    if [[ "${FW_PREFIX,,}" == "main" ]]; then
+        REQUESTED_VERSION="$PORT_VERSION"
+    elif [[ "${FW_PREFIX,,}" == "extra" ]]; then
+        REQUESTED_VERSION="$EXTRA_VERSION"
+    fi
 
     local TARGET_DIR="${BASE_DIR}/${DEVICE_MODEL}_${REGION_CODE}"
     local METADATA_FILE="${TARGET_DIR}/firmware.info"
@@ -110,10 +130,10 @@ FETCH_FW() {
         LATEST_VERSION=$(echo "$VERSION_XML" | grep -oP '<latest o="\d+">\K[^<]+' | head -1)
     fi
 
-    if [[ -n "$PORT_VERSION" ]]; then
-        SIMPLE_VERSION="$PORT_VERSION"
-        FULL_VERSION="$PORT_VERSION"
-        LOG_INFO "Requested firmware version: $PORT_VERSION"
+    if [[ -n "$REQUESTED_VERSION" ]]; then
+        SIMPLE_VERSION="$REQUESTED_VERSION"
+        FULL_VERSION="$REQUESTED_VERSION"
+        LOG_INFO "Requested firmware version: $REQUESTED_VERSION"
     else
         SIMPLE_VERSION="$LATEST_VERSION"
         FULL_VERSION="${ANDROID_VERSION}_${SIMPLE_VERSION}"
@@ -133,9 +153,9 @@ FETCH_FW() {
     [[ -f "$METADATA_FILE" ]] && CURRENT_VERSION=$(<"$METADATA_FILE")
 
     if [[ "$HAS_LOCAL_FIRMWARE" == true ]]; then
-        if [[ -n "$PORT_VERSION" ]]; then
-            if [[ "$CURRENT_VERSION" == "$PORT_VERSION" ]]; then
-                LOG_END "$FW_PREFIX firmware is already at requested version ($PORT_VERSION)"
+        if [[ -n "$REQUESTED_VERSION" ]]; then
+            if [[ "$CURRENT_VERSION" == "$REQUESTED_VERSION" ]]; then
+                LOG_END "$FW_PREFIX firmware is already at requested version ($REQUESTED_VERSION)"
                 return 0
             fi
         elif [[ "$CURRENT_VERSION" == "$FULL_VERSION" ]]; then
@@ -165,9 +185,9 @@ FETCH_FW() {
             --region "$REGION_CODE"
         )
 
-        if [[ -n "$PORT_VERSION" ]]; then
-            LOG_INFO "Samloader: downloading requested version $PORT_VERSION"
-            SAMLOADER_ARGS+=(--version "$PORT_VERSION")
+        if [[ -n "$REQUESTED_VERSION" ]]; then
+            LOG_INFO "Samloader: downloading requested version $REQUESTED_VERSION"
+            SAMLOADER_ARGS+=(--version "$REQUESTED_VERSION")
         else
             LOG_INFO "Samloader: downloading latest firmware"
         fi
@@ -209,6 +229,20 @@ FETCH_FW() {
 
 }
 
+
+PRINT_FIRMWARE_STORAGE() {
+    local TOTAL_KB=0
+    local TARGET
+
+    for TARGET in "$FW_BASE"/*; do
+        [[ -d "$TARGET" ]] || continue
+        local SIZE_KB
+        SIZE_KB=$(du -sk "$TARGET" 2>/dev/null | awk '{print $1}')
+        TOTAL_KB=$((TOTAL_KB + SIZE_KB))
+    done
+
+    LOG_INFO "Firmware storage used: $((TOTAL_KB / 1024 / 1024)) GB"
+}
 
 _CHECK_NETWORK_CONNECTION() {
     curl -s \

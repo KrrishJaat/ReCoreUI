@@ -20,7 +20,7 @@ set -o pipefail
 RECOREUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export RECOREUI
 
-ROM_VERSION="8.1.Ultra"
+ROM_VERSION="8.6"
 
 BETA_ASSERT=0
 BETA_OTA_URL=""
@@ -154,11 +154,15 @@ _BUILD_ROM()
 
     source "$OBJECTIVE/$DEVICE.sh" || ERROR_EXIT "Device config load failed"
 
-    # Github Ubuntu runners have 72GB storage only. So skip extra firmwares
-    if  IS_GITHUB_ACTIONS; then
-        unset EXTRA_MODEL
-        unset EXTRA_CSC
-        unset EXTRA_IMEI
+    # GitHub Actions has limited disk space, but this build supports
+    # MAIN + STOCK + EXTRA firmware simultaneously. Do not drop EXTRA.
+    # Storage is managed by the downloader through deduplication and
+    # temporary-directory cleanup.
+    if IS_GITHUB_ACTIONS; then
+        LOG_INFO "GitHub Actions: three-source firmware mode enabled"
+        LOG_INFO "  MAIN  : ${MODEL:-unset} (${CSC:-unset})"
+        LOG_INFO "  STOCK : ${STOCK_MODEL:-unset} (${STOCK_CSC:-unset})"
+        LOG_INFO "  EXTRA : ${EXTRA_MODEL:-unset} (${EXTRA_CSC:-unset})"
     fi
 
     local META_TAG="last_objective"
@@ -176,6 +180,17 @@ _BUILD_ROM()
         LOG_INFO "Initializing device environment for $DEVICE"
 
         SETUP_DEVICE_ENV || ERROR_EXIT "environment setup failed"
+
+        if IS_GITHUB_ACTIONS; then
+            local AVAILABLE_GB
+            AVAILABLE_GB="$(df -BG "$RECOREUI" 2>/dev/null | awk 'NR==2 {gsub(/G/,"",$4); print $4}')"
+            if [[ -n "$AVAILABLE_GB" ]]; then
+                LOG_INFO "GitHub Actions free disk space after firmware setup: ${AVAILABLE_GB} GB"
+                if (( AVAILABLE_GB < 15 )); then
+                    ERROR_EXIT "Less than 15 GB free after firmware setup. Three-firmware build may run out of storage."
+                fi
+            fi
+        fi
 
         mkdir -p "$(dirname "$MARKER_FILE")"
         sed -i "/^$META_TAG /d" "$MARKER_FILE" 2>/dev/null || true

@@ -1,9 +1,3 @@
-# ==============================================================================
-#
-# MOD_NAME="Overlay From Stock"
-# MOD_AUTHOR="KrrishJaat"
-#
-# ==============================================================================
 
 SYSTEM_NAME="$(GET_PROP "system" "ro.product.system.name" "stock")"
 FW_DIR="$(GET_FW_DIR "stock")"

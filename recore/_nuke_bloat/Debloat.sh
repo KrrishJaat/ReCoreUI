@@ -73,7 +73,6 @@ BLOAT_TARGETS+=(
     "BardShell"           # Gemini App
     "Gmail2"
     "AssistantShell"
-    "Chrome"
     "DuoStub"
     "Maps"
     "PlayAutoInstallConfig" # PAI

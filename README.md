@@ -52,7 +52,6 @@ To provide a modular, device-adaptive OneUI port framework that can patch suppor
 - Network speed Meter
 - AppLock support
 - Data usage display on notification shade
-- Firewall
 - App blocker and permission manager
 - AltZlife
 - Native call recording
@@ -71,7 +70,7 @@ This project wouldn't be possible without the incredible work of:
 - **[jesec](https://github.com/jesec)** - For samfirm.js , which we use to download the latest firmwares.
 - **[3arthur6](https://github.com/3arthur6)** - For bluetooth library patcher.
 - **[soulr344](https://github.com/soulr344/OMCDecoder)** - For omc decoder.
-- **[Pritam](https://github.com/nostalgiceagle)** - For fp patch.
+- **[Pritam](https://github.com/nostalgiceagle)** - For fp patch and helping us to boot 8.5 on exynos 1330.
 - **[Hunter](https://github.com/devhunter1)** - For Exynos 1330 [Kernel](https://github.com/devhunter1/android_kernel_samsung_s5e8535).
 - **[Majaahh](https://github.com/majaahh)** - Gay Trans Polish Kid 
 - **Thanks to Testers too**

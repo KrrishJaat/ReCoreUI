@@ -1,7 +1,7 @@
 # https://github.com/ShaDisNX255/NcX_Stock/commit/c2cc85818df4fe040b4f89ca8f9b78e939b211b4
 # https://forum.xda-developers.com/t/mods-samsung-not-android-mods-collection-exynos.3772017/post-86811691
 
-FILE smali_classes2/com/android/server/wm/WindowState.smali
+FILE com/android/server/wm/WindowState.smali
 REPLACE .method public final isSecureLocked()Z
     .locals 1
     
@@ -13,7 +13,7 @@ REPLACE .method public final isSecureLocked()Z
 END
 
 
-FILE smali_classes2/com/android/server/wm/WindowManagerService.smali
+FILE com/android/server/wm/WindowManagerService.smali
 REPLACE .method public final notifyScreenshotListeners(I)Ljava/util/List;
     .locals 3
     .annotation system Ldalvik/annotation/Signature;

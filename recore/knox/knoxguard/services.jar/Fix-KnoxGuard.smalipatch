@@ -1,6 +1,6 @@
 AUTHOR Salvo Giangreco <giangrecosalvo9@gmail.com>
 
-FILE smali_classes2/com/samsung/android/knoxguard/service/KnoxGuardSeService.smali
+FILE com/samsung/android/knoxguard/service/KnoxGuardSeService.smali
 REPLACE  .method public constructor <init>(Landroid/content/Context;)V
     .locals 0
  

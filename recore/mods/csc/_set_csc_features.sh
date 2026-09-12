@@ -20,7 +20,7 @@ CSC_FEATURES=(
 "CscFeature_Gallery_SupportAliveZoom|TRUE"
 "CscFeature_Setting_ConfigTypeHelp|0"
 "CscFeature_Setting_EnableHwVersionDisplay|TRUE"
-"CscFeature_Setting_SupportELabelManufacturer|ASTROROM"
+"CscFeature_Setting_SupportELabelManufacturer|RECOREUI"
 "CscFeature_Setting_SupportRegulatoryInfo|FALSE"
 "CscFeature_SmartManager_ConfigDashboard|dual_dashboard"
 "CscFeature_SmartManager_ConfigSubFeatures|applock|appcleanner|autolaunch|autorestart|devicesecurity|storageclean|backgroundapp|UDS|UDS2|applicationpermission|networkpowersaving|notificationmanager|trafficmanager|roguepopup|data_compression|cstyle"
