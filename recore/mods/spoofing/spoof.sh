@@ -1,11 +1,10 @@
 ########################################
-# Spoof To S25 Ultra
+# Spoof From Extra Firmware
 ########################################
 
 LOG_INFO "Applying custom spoof props..."
 
-# System props
-BPROP "system" "ro.product.system.model" "SM-S938B"
-BPROP "system" "ro.product.system.name" "pa3qxxx"
+BPROP "system" "ro.product.system.model" "$(GET_BPROP_VAL "extra" "ro.product.system.model")"
+BPROP "system" "ro.product.system.name" "$(GET_BPROP_VAL "extra" "ro.product.system.name")"
 
 LOG_INFO "Custom spoof props applied!"
