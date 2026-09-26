@@ -5,7 +5,7 @@
 _UN1CA_SELF_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _UN1CA_PREBUILTS="${PREBUILTS:-${RECOREUI:-$(cd "$_UN1CA_SELF_DIR/.." && pwd)}/prebuilts}"
 _UN1CA_PATCHER="$_UN1CA_PREBUILTS/smalipatch/un1ca_patch.py"
-_UN1CA_SMALI_COMPAT="$_UN1CA_SELF_DIR/un1ca_smali_compat.py"
+_UN1CA_SMALI_COMPAT="$_UN1CA_PREBUILTS/smalipatch/un1ca_smali_compat.py"
 
 # Companion files this whole layer depends on. Missing one used to only
 # surface as a raw "python3: can't open file ..." buried mid-build, with no

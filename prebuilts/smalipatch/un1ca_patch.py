@@ -106,8 +106,18 @@ def git_apply(work: Path, patch: Path, strip=1):
 
 
 def patch_check(work: Path, patch: Path, reverse=False, fuzz=2, strip=1):
-    cmd = ["patch", "--batch", "--forward" if not reverse else "--reverse",
-           f"--fuzz={fuzz}", "--no-backup-if-mismatch", f"-p{strip}", "-l", "--dry-run"]
+    cmd = ["patch", "--batch"]
+    if reverse:
+        # `patch -R` normally auto-detects an unapplied patch and silently
+        # flips itself back to a forward application, returning success. That
+        # makes a reverse dry-run unusable as an idempotency probe. Pairing
+        # `--reverse` with `--forward` changes that behavior: a genuinely
+        # reversed/applied patch succeeds, while an unreversed patch is skipped
+        # with a non-zero dry-run status.
+        cmd += ["--reverse", "--forward"]
+    else:
+        cmd += ["--forward"]
+    cmd += [f"--fuzz={fuzz}", "--no-backup-if-mismatch", f"-p{strip}", "-l", "--dry-run"]
     return run(cmd, cwd=str(work), stdin=patch.read_text(encoding="utf-8"))
 
 
@@ -166,36 +176,20 @@ def apply_un1ca_patch(work_dir: str, patch_file: str, *, dry_run=False,
 
     candidates = strip_candidates(patch)
 
-    # Reverse-check first, via git's own exact (non-fuzzy) matching. For GNU
-    # patch, only attempt a reverse check when the patch contains real
-    # deletions - an insertion-only patch has nothing for a reverse-apply to
-    # remove, so a naive reverse dry-run can misreport "already applied" on
-    # a patch that was never applied at all.
+    # Reverse-check first using exact Git matching, then a bounded GNU patch
+    # reverse-check for compatibility with fuzzed/pre-existing UN1CA state.
+    # The GNU probe must use `--reverse --forward`; plain `--reverse` can
+    # auto-flip an unapplied patch and return 0, falsely reporting success.
     for strip in candidates:
         r = git_check(work, patch, reverse=True, strip=strip)
         if r.returncode == 0:
             if not quiet: print(f"[UN1CA] Already applied: {patch.name}")
             return 0
-    if has_real_deletions(patch):
-        for strip in candidates:
-            r = patch_check(work, patch, reverse=True, fuzz=min(fuzz, 2), strip=strip)
-            out = r.stdout + r.stderr
-            # GNU patch second-guesses the direction it's given: asked to
-            # reverse-apply a patch that ISN'T applied yet, it prints
-            # "Unreversed patch detected!  Ignoring -R." and quietly applies
-            # it FORWARD instead, still exiting 0 - which is indistinguishable
-            # from a real successful reverse-check by return code alone, and
-            # was silently reporting "already applied" on a patch that had
-            # genuinely never been touched. A true reverse success prints
-            # nothing but "checking file ..."; both of patch's own
-            # self-correction messages ("Reversed (or previously applied)
-            # patch detected" and "Unreversed patch detected") end in
-            # "patch detected", so reject on that rather than one specific
-            # wording.
-            if r.returncode == 0 and "patch detected" not in out:
-                if not quiet: print(f"[UN1CA] Already applied (compatibility state): {patch.name}")
-                return 0
-
+    for strip in candidates:
+        r = patch_check(work, patch, reverse=True, fuzz=min(fuzz, 2), strip=strip)
+        if r.returncode == 0:
+            if not quiet: print(f"[UN1CA] Already applied (compatibility state): {patch.name}")
+            return 0
     for strip in candidates:
         r = git_check(work, patch, reverse=False, strip=strip)
         if r.returncode == 0:

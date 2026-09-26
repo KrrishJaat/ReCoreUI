@@ -208,14 +208,31 @@ DECOMPILE()
             local OUT="smali"
             [[ $PART -gt 1 ]] && INPUT="$FILE/classes.dex/$PART" && OUT="smali_classes$PART"
 
-            _APKTOOL_RUN_LOGGED "Baksmali $NAME part $PART" -- \
-                java -jar "$PREBUILTS/smali/baksmali.jar" d -a "$API" -j "$USABLE_THREADS" \
-                --ac false --di false -l -o "$WORK_DIR/$OUT" "$INPUT"
+            local BAKSMALI_OUTPUT BAKSMALI_RC BAKSMALI_LOG
+            BAKSMALI_OUTPUT="$(java -jar "$PREBUILTS/smali/baksmali.jar" d -a "$API" -j "$USABLE_THREADS" \
+                --ac false --di false -l -o "$WORK_DIR/$OUT" "$INPUT" 2>&1)"
+            BAKSMALI_RC=$?
 
-            if [[ $? -ne 0 || ! -d "$WORK_DIR/$OUT" ]]; then
+            if [[ $BAKSMALI_RC -ne 0 ]]; then
                 rm -rf "$WORK_DIR/$OUT"
-                break
+
+                # A DEX v041 container is indexed as classes.dex/2, classes.dex/3, ...
+                # through baksmali's container path syntax. Probing the next index
+                # therefore ends with DexFileNotFoundException once the last member
+                # has been extracted. That is normal termination, not a build error.
+                if [[ $PART -gt 1 && "$BAKSMALI_OUTPUT" == *"Could not find a dex entry"* && \
+                      "$BAKSMALI_OUTPUT" == *"matching classes.dex/$PART"* ]]; then
+                    break
+                fi
+
+                BAKSMALI_LOG="$(_APKTOOL_LOG_WRITE "Baksmali $NAME part $PART" "$BAKSMALI_OUTPUT" "$BAKSMALI_RC")"
+                printf '%s\n' "$BAKSMALI_OUTPUT" | tail -n 40 >&2
+                printf '\033[0;33m(last 40 lines shown above - full output in %s)\033[0m\n' "$BAKSMALI_LOG" >&2
+                ERROR_EXIT "Baksmali failed: $NAME part $PART - see $_APKTOOL_LOG_DIR"
             fi
+
+            _APKTOOL_LOG_WRITE "Baksmali $NAME part $PART" "$BAKSMALI_OUTPUT" 0 >/dev/null
+            [[ -d "$WORK_DIR/$OUT" ]] || ERROR_EXIT "Baksmali produced no output: $NAME part $PART"
 
             ((PART++))
             [[ $PART -gt 99 ]] && break
