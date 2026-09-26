@@ -7,6 +7,15 @@ _UN1CA_PREBUILTS="${PREBUILTS:-${RECOREUI:-$(cd "$_UN1CA_SELF_DIR/.." && pwd)}/p
 _UN1CA_PATCHER="$_UN1CA_PREBUILTS/smalipatch/un1ca_patch.py"
 _UN1CA_SMALI_COMPAT="$_UN1CA_SELF_DIR/un1ca_smali_compat.py"
 
+# Companion files this whole layer depends on. Missing one used to only
+# surface as a raw "python3: can't open file ..." buried mid-build, with no
+# indication of which module/operation triggered it or what to actually do
+# about it. One clear warning here, at source time, up front.
+for _UN1CA_DEP in "$_UN1CA_PATCHER" "$_UN1CA_SMALI_COMPAT"; do
+    [[ -f "$_UN1CA_DEP" ]] || printf '\033[0;33mUN1CA: warning: expected companion file missing: %s (APPLY_PATCH/SMALI_PATCH calls that need it will fail)\033[0m\n' "$_UN1CA_DEP" >&2
+done
+unset _UN1CA_DEP
+
 # Capture native ReCoreUI GET_PROP exactly once, before the UN1CA wrapper
 # below is installed under the same name. This is what avoids the recursive
 # self-wrapping bug: the capture never repeats inside a per-module code path,
@@ -229,16 +238,26 @@ _UN1CA_UNUSED_ELSEWHERE() {
     [[ -z "$hits" ]]
 }
 
+# Same leading-"system/"-stripping rule as _UN1CA_REAL_PATH, for the
+# $APKTOOL_DIR (virtual/decoded-tree) side of the mapping instead of the
+# real-workspace side. Shared by SMALI_PATCH and APPLY_PATCH so both compute
+# the same tree_root for the same <partition, file> the same way.
+_UN1CA_APKTOOL_REL() {
+    local part="$1" file="$2"
+    while [[ "$file" == /* ]]; do file="${file#/}"; done
+    [[ "$part" == system ]] && file="${file#system/}"
+    printf '%s\n' "$file"
+}
+
 SMALI_PATCH() {
     local part="$1" file="$2" smali="$3" op="${4:-}"
     [[ -n "$part" && -n "$file" && -n "$smali" && -n "$op" ]] || return 1
     _UN1CA_VALID_PARTITION "$part" || return 1
     DECODE_APK "$part" "$file" || return 1
-    local relfile="$file"
-    while [[ "$relfile" == /* ]]; do relfile="${relfile#/}"; done
-    [[ "$part" == system ]] && relfile="${relfile#system/}"
-    local tree_root="$APKTOOL_DIR/$part/$relfile"
-    local fp="$tree_root/$smali"
+    local relfile tree_root fp
+    relfile="$(_UN1CA_APKTOOL_REL "$part" "$file")"
+    tree_root="$APKTOOL_DIR/$part/$relfile"
+    fp="$tree_root/$smali"
     [[ -f "$fp" ]] || { printf 'UN1CA: smali not found: %s\n' "$fp" >&2; return 1; }
     local cls="${smali%.smali}"; cls="${cls##*/}"
     case "$op" in
@@ -261,6 +280,30 @@ SMALI_PATCH() {
         return|null) python3 "$_UN1CA_SMALI_COMPAT" "$op" "$fp" "${5:-}" "${6:-}";;
         *) printf 'UN1CA: invalid SMALI_PATCH operation: %s\n' "$op" >&2; return 1;;
     esac
+}
+
+# UN1CA's own file-based patch mechanism, callable directly from customize.sh
+# (some modules call this inline instead of - or in addition to - dropping
+# .patch files under smali/ for the automatic post-customize.sh sweep). This
+# was missing entirely before: customize.sh scripts that call it directly got
+# a bare "APPLY_PATCH: command not found" from bash and silently kept going
+# (bash doesn't abort on an unknown command by default), which is why the
+# smali it was supposed to introduce was never there for a later SMALI_PATCH
+# call to find. Routes through the same un1ca_patch.py engine as the
+# automatic sweep, not a raw git-apply, so it gets the same idempotency and
+# path-safety guarantees either way a module chooses to ship its patches.
+APPLY_PATCH() {
+    local part="$1" file="$2" patch="${3:-}"
+    [[ -n "$part" && -n "$file" && -n "$patch" ]] || { printf 'UN1CA: APPLY_PATCH requires partition, file, patch\n' >&2; return 1; }
+    _UN1CA_VALID_PARTITION "$part" || return 1
+    [[ -f "$patch" ]] || { printf 'UN1CA: patch not found: %s\n' "$patch" >&2; return 1; }
+    [[ -f "$_UN1CA_PATCHER" ]] || { printf 'UN1CA: patch engine missing: %s\n' "$_UN1CA_PATCHER" >&2; return 1; }
+    DECODE_APK "$part" "$file" || return 1
+    local relfile tree_root
+    relfile="$(_UN1CA_APKTOOL_REL "$part" "$file")"
+    tree_root="$APKTOOL_DIR/$part/$relfile"
+    [[ -d "$tree_root" ]] || { printf 'UN1CA: decoded tree not found: %s\n' "$tree_root" >&2; return 1; }
+    python3 "$_UN1CA_PATCHER" "$tree_root" "$patch"
 }
 
 _APPLY_MODULE_SMALI_PATCHES() {
