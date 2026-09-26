@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-"""ReCoreUI UN1CA unified/Git patch engine.
+"""ReCoreUI UN1CA patch executor.
 
-Applies stock UN1CA *.patch files to an Apktool/baksmali work directory.
-The engine is deliberately conservative: it validates patch paths (including
-symlink escape, not just textual .. / absolute paths), checks idempotency via
-exact reverse-apply rather than assuming a failed forward-apply means
-"already applied", prefers git apply, and only falls back to bounded GNU
-patch fuzz as a last resort - rolling back cleanly if that fallback fails
-partway instead of leaving a partially-patched file behind.
+Apply stock UN1CA unified/Git patches to decoded Apktool trees.
+The decoded tree normally lives inside the outer ReCoreUI Git repository,
+so Git must be isolated with a temporary GIT_DIR/GIT_WORK_TREE pair; otherwise
+`git apply` can resolve paths against the outer repository, return success for
+untracked decoded files, and change nothing.
 """
 from __future__ import annotations
-import argparse, os, re, subprocess, sys
+import argparse, os, re, subprocess, sys, tempfile
 from pathlib import Path
 
 
@@ -18,10 +16,12 @@ def err(msg: str) -> None:
     print(f"un1ca_patch.py: ERROR: {msg}", file=sys.stderr)
 
 
-def run(cmd, cwd=None, stdin=None):
+def run(cmd, cwd=None, stdin=None, env_extra=None):
     env = os.environ.copy()
     env["GIT_CONFIG_NOSYSTEM"] = "1"
     env.setdefault("LC_ALL", "C")
+    if env_extra:
+        env.update(env_extra)
     return subprocess.run(cmd, cwd=cwd, input=stdin, text=True,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           env=env)
@@ -45,15 +45,11 @@ def _clean_path(path: str):
 
 
 def validate_patch_file(p: Path) -> list[str]:
-    """Validates the patch is well-formed and every touched path is safe
-    (no absolute path, no .. traversal). Returns the cleaned relative target
-    paths for later use (backup/rollback, symlink-escape check)."""
     if not p.is_file():
         raise ValueError(f"Patch file not found: {p}")
     text = p.read_text(encoding="utf-8", errors="strict")
     if not re.search(r"(?m)^(diff --git |--- |From )", text):
         raise ValueError("not a supported unified/Git patch")
-
     cleaned_paths = []
     for path in _extract_raw_paths(text):
         clean = _clean_path(path)
@@ -68,12 +64,6 @@ def validate_patch_file(p: Path) -> list[str]:
 
 
 def validate_no_symlink_escape(work: Path, rel_paths: list[str]) -> None:
-    """A patch's own path text can look perfectly safe (no absolute path, no
-    ..) and still escape the work directory if some component of the real
-    filesystem path is a symlink pointing elsewhere. realpath() resolves
-    every symlink that actually exists along the way; a not-yet-created leaf
-    file is fine since the traversal-escape risk is only in the *existing*
-    directory structure."""
     work_real = os.path.realpath(str(work))
     for rel in rel_paths:
         target_real = os.path.realpath(str(work / rel))
@@ -81,39 +71,40 @@ def validate_no_symlink_escape(work: Path, rel_paths: list[str]) -> None:
             raise ValueError(f"patch target escapes work dir via symlink: {rel}")
 
 
-def has_real_deletions(p: Path) -> bool:
-    for raw in p.read_text(encoding="utf-8").splitlines():
-        if raw.startswith("--- ") or raw.startswith("+++ "):
-            continue
-        if raw.startswith("-") and not raw.startswith("---"):
-            return True
-    return False
+def new_file_targets(p: Path) -> list[str]:
+    lines = p.read_text(encoding="utf-8", errors="strict").splitlines()
+    out = []
+    for i, line in enumerate(lines[:-1]):
+        if line == "--- /dev/null" and lines[i + 1].startswith("+++ b/"):
+            out.append(lines[i + 1][6:].split("\t", 1)[0].strip())
+    return sorted(set(out))
 
 
-def git_check(work: Path, patch: Path, reverse=False, strip=1):
+def git_check(work: Path, patch: Path, git_dir: Path, reverse=False, strip=1):
     cmd = ["git", "-c", "core.safecrlf=false",
            "apply", "--check", "--whitespace=nowarn", f"-p{strip}"]
     if reverse:
         cmd.append("--reverse")
     cmd.append(str(patch))
-    return run(cmd, cwd=str(work))
+    return run(cmd, cwd=str(work), env_extra={
+        "GIT_DIR": str(git_dir),
+        "GIT_WORK_TREE": str(work),
+    })
 
 
-def git_apply(work: Path, patch: Path, strip=1):
+def git_apply(work: Path, patch: Path, git_dir: Path, strip=1):
     cmd = ["git", "-c", "core.safecrlf=false",
            "apply", "--whitespace=nowarn", f"-p{strip}", str(patch)]
-    return run(cmd, cwd=str(work))
+    return run(cmd, cwd=str(work), env_extra={
+        "GIT_DIR": str(git_dir),
+        "GIT_WORK_TREE": str(work),
+    })
 
 
 def patch_check(work: Path, patch: Path, reverse=False, fuzz=2, strip=1):
     cmd = ["patch", "--batch"]
     if reverse:
-        # `patch -R` normally auto-detects an unapplied patch and silently
-        # flips itself back to a forward application, returning success. That
-        # makes a reverse dry-run unusable as an idempotency probe. Pairing
-        # `--reverse` with `--forward` changes that behavior: a genuinely
-        # reversed/applied patch succeeds, while an unreversed patch is skipped
-        # with a non-zero dry-run status.
+        # Prevent GNU patch from auto-flipping an unapplied patch.
         cmd += ["--reverse", "--forward"]
     else:
         cmd += ["--forward"]
@@ -128,20 +119,15 @@ def patch_apply(work: Path, patch: Path, fuzz=2, strip=1):
 
 
 def clean_artifacts(work: Path) -> bool:
-    bad = list(work.rglob("*.rej")) + list(work.rglob("*.orig"))
-    return not bad
+    return not (list(work.rglob("*.rej")) + list(work.rglob("*.orig")))
 
 
 def strip_candidates(patch: Path):
     text = patch.read_text(encoding="utf-8", errors="strict")
-    # UN1CA Git patches use a/ and b/. Plain unified patches normally need p0.
     return [1, 0] if re.search(r"(?m)^diff --git a/", text) else [0, 1]
 
 
 def _backup_targets(work: Path, rel_paths: list[str]) -> dict:
-    """Snapshots every file the fallback is about to touch, recording None
-    for files that don't exist yet, so a failed fallback can be undone
-    exactly instead of leaving a partially-applied hunk in place."""
     backups = {}
     for rel in rel_paths:
         full = work / rel
@@ -171,70 +157,101 @@ def apply_un1ca_patch(work_dir: str, patch_file: str, *, dry_run=False,
         raise ValueError(f"work directory not found: {work}")
     rel_targets = validate_patch_file(patch)
     validate_no_symlink_escape(work, rel_targets)
+    expected_new = new_file_targets(patch)
     if subject and not quiet:
         print(f"[UN1CA] {patch.name}")
-
     candidates = strip_candidates(patch)
 
-    # Reverse-check first using exact Git matching, then a bounded GNU patch
-    # reverse-check for compatibility with fuzzed/pre-existing UN1CA state.
-    # The GNU probe must use `--reverse --forward`; plain `--reverse` can
-    # auto-flip an unapplied patch and return 0, falsely reporting success.
-    for strip in candidates:
-        r = git_check(work, patch, reverse=True, strip=strip)
-        if r.returncode == 0:
-            if not quiet: print(f"[UN1CA] Already applied: {patch.name}")
-            return 0
-    for strip in candidates:
-        r = patch_check(work, patch, reverse=True, fuzz=min(fuzz, 2), strip=strip)
-        if r.returncode == 0:
-            if not quiet: print(f"[UN1CA] Already applied (compatibility state): {patch.name}")
-            return 0
-    for strip in candidates:
-        r = git_check(work, patch, reverse=False, strip=strip)
-        if r.returncode == 0:
-            if dry_run:
-                if not quiet: print(f"[UN1CA] Dry-run OK: {patch.name}")
-                return 0
-            a = git_apply(work, patch, strip=strip)
-            if a.returncode == 0:
-                if not quiet: print(f"[UN1CA] Applied: {patch.name}")
-                return 0
-            if verbose and not quiet:
-                print(a.stderr, file=sys.stderr, end="")
+    # Git must be isolated from any parent repository. ReCoreUI's decoded
+    # trees are untracked directories nested under the checkout, and plain
+    # `git apply` in them can return 0 while changing nothing.
+    with tempfile.TemporaryDirectory(prefix="un1ca_git_") as git_tmp:
+        git_dir = Path(git_tmp) / "repo"
+        init = run(["git", "init", "-q", str(git_dir)])
+        if init.returncode != 0:
+            raise RuntimeError(init.stderr.strip() or "failed to initialize temporary Git directory")
 
-    if fallback:
+        # Exact reverse check = already applied. Because this Git context is
+        # private to the decoded tree, it actually tests the files on disk.
         for strip in candidates:
-            r = patch_check(work, patch, reverse=False, fuzz=min(fuzz, 2), strip=strip)
-            out = r.stdout + r.stderr
-            bad = re.search(r"FAILED|saving rejects|Hunk #[0-9]+ FAILED|Reversed \(or previously applied\)|Skipping patch", out)
-            if r.returncode == 0 and not bad:
+            r = git_check(work, patch, git_dir, reverse=True, strip=strip)
+            if r.returncode == 0:
+                missing = [rel for rel in expected_new if not (work / rel).is_file()]
+                if not missing:
+                    if not quiet:
+                        print(f"[UN1CA] Already applied: {patch.name}")
+                    return 0
+
+        # Some UN1CA patches are accepted through bounded GNU fuzz because the
+        # ROM baseline differs slightly. Recognize that already-applied state
+        # with GNU's explicit --reverse --forward probe, which cannot silently
+        # flip an unapplied patch. This is intentionally SECONDARY: plain Git
+        # reverse-check must not be used against the outer ReCoreUI repository.
+        for strip in candidates:
+            r = patch_check(work, patch, reverse=True, fuzz=min(fuzz, 2), strip=strip)
+            if r.returncode == 0:
+                missing = [rel for rel in expected_new if not (work / rel).is_file()]
+                if not missing:
+                    if not quiet:
+                        print(f"[UN1CA] Already applied (compatibility state): {patch.name}")
+                    return 0
+
+        for strip in candidates:
+            r = git_check(work, patch, git_dir, reverse=False, strip=strip)
+            if r.returncode == 0:
                 if dry_run:
-                    if not quiet: print(f"[UN1CA] Dry-run OK (fallback): {patch.name}")
+                    if not quiet:
+                        print(f"[UN1CA] Dry-run OK: {patch.name}")
                     return 0
-                backups = _backup_targets(work, rel_targets)
-                a = patch_apply(work, patch, fuzz=min(fuzz, 2), strip=strip)
-                if a.returncode == 0 and clean_artifacts(work):
-                    if not quiet: print(f"[UN1CA] Applied with bounded fallback: {patch.name}")
+                a = git_apply(work, patch, git_dir, strip=strip)
+                if a.returncode == 0:
+                    missing = [rel for rel in expected_new if not (work / rel).is_file()]
+                    if missing:
+                        err(f"patch reported success but did not create expected file(s): {', '.join(missing)}")
+                        return 1
+                    if not quiet:
+                        print(f"[UN1CA] Applied: {patch.name}")
                     return 0
-                # Fallback failed partway (or left .rej/.orig) - undo any
-                # partial write rather than leaving a half-patched file.
-                _restore_targets(work, backups)
-                for stray in list(work.rglob("*.rej")) + list(work.rglob("*.orig")):
-                    try:
-                        stray.unlink()
-                    except OSError:
-                        pass
-                err(a.stderr or "GNU patch failed or left reject/original files; rolled back")
-                return 1
+                if verbose and not quiet:
+                    print(a.stderr, file=sys.stderr, end="")
 
-    err(f"patch context mismatch: {patch.name}")
-    if verbose:
-        print("git apply diagnostics:", file=sys.stderr)
-        for strip in candidates:
-            r = git_check(work, patch, reverse=False, strip=strip)
-            print(r.stderr, file=sys.stderr, end="")
-    return 1
+        if fallback:
+            for strip in candidates:
+                r = patch_check(work, patch, reverse=False, fuzz=min(fuzz, 2), strip=strip)
+                out = r.stdout + r.stderr
+                bad = re.search(r"FAILED|saving rejects|Hunk #[0-9]+ FAILED|Reversed \(or previously applied\)|Skipping patch", out)
+                if r.returncode == 0 and not bad:
+                    if dry_run:
+                        if not quiet:
+                            print(f"[UN1CA] Dry-run OK (fallback): {patch.name}")
+                        return 0
+                    backups = _backup_targets(work, rel_targets)
+                    a = patch_apply(work, patch, fuzz=min(fuzz, 2), strip=strip)
+                    if a.returncode == 0 and clean_artifacts(work):
+                        missing = [rel for rel in expected_new if not (work / rel).is_file()]
+                        if missing:
+                            _restore_targets(work, backups)
+                            err(f"patch reported success but did not create expected file(s): {', '.join(missing)}")
+                            return 1
+                        if not quiet:
+                            print(f"[UN1CA] Applied with bounded fallback: {patch.name}")
+                        return 0
+                    _restore_targets(work, backups)
+                    for stray in list(work.rglob("*.rej")) + list(work.rglob("*.orig")):
+                        try:
+                            stray.unlink()
+                        except OSError:
+                            pass
+                    err(a.stderr or "GNU patch failed or left reject/original files; rolled back")
+                    return 1
+
+        err(f"patch context mismatch: {patch.name}")
+        if verbose:
+            print("git apply diagnostics:", file=sys.stderr)
+            for strip in candidates:
+                r = git_check(work, patch, git_dir, reverse=False, strip=strip)
+                print(r.stderr, file=sys.stderr, end="")
+        return 1
 
 
 def main():
@@ -253,9 +270,10 @@ def main():
         return 2
     try:
         return apply_un1ca_patch(args.work_dir, args.patch_file,
-            dry_run=args.dry_run, quiet=args.quiet, verbose=args.verbose,
-            fuzz=args.fuzz, fallback=not args.no_fallback,
-            subject=not args.no_subject)
+                                 dry_run=args.dry_run, quiet=args.quiet,
+                                 verbose=args.verbose, fuzz=args.fuzz,
+                                 fallback=not args.no_fallback,
+                                 subject=not args.no_subject)
     except Exception as e:
         err(str(e))
         return 1
