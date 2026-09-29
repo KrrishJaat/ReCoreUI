@@ -36,7 +36,6 @@ To provide a modular, device-adaptive OneUI port framework that can patch suppor
 - Official status in device information
 - Modular debloat system
 - Bluetooth library patched
-- Smart Manager China
 - Samsung encryption removed
 - Fixed Knox apps (Secure Folder,Secure WiFi,Private Share,Health etc)
 - Fixed samsung wearables 
