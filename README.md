@@ -6,6 +6,7 @@ It automatically adapts and patches supported Samsung firmware builds while main
 
 Simply match the correct branch to your OneUI version, and ReCoreUI handles the rest.
 
+<a href="https://deepwiki.com/KrrishJaat/ReCoreUI"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 
 ### Project Aim
 
